@@ -25,11 +25,12 @@ except Exception:
 
 
 class DriveTrayIndicator:
-    def __init__(self, config: dict, db, sync_worker, omaha_updater, on_open_settings=None):
+    def __init__(self, config: dict, db, sync_worker, omaha_updater, github_updater=None, on_open_settings=None):
         self.config = config
         self.db = db
         self.sync_worker = sync_worker
         self.updater = omaha_updater
+        self.github_updater = github_updater
         self.on_open_settings = on_open_settings
         self.indicator = None
         self.menu = None
@@ -104,10 +105,14 @@ class DriveTrayIndicator:
             pause_item.connect("activate", lambda _: self.sync_worker.pause() if self.sync_worker else None)
         menu.append(pause_item)
 
-        # 5. Check Updates
-        update_item = Gtk.MenuItem(label="🔄 Verificar Atualizações (Google Omaha)")
-        update_item.connect("activate", self._on_check_updates)
-        menu.append(update_item)
+        # 5. Check Updates (Dual Channel)
+        update_omaha = Gtk.MenuItem(label="🔄 Atualização Oficial do Google Drive (Google)")
+        update_omaha.connect("activate", self._on_check_updates)
+        menu.append(update_omaha)
+
+        update_github = Gtk.MenuItem(label="⬆️ Atualização do Programa Linux (GitHub)")
+        update_github.connect("activate", self._on_check_github_updates)
+        menu.append(update_github)
 
         # 6. Preferences
         pref_item = Gtk.MenuItem(label="⚙️ Preferências...")
@@ -156,6 +161,29 @@ class DriveTrayIndicator:
                     message_type=Gtk.MessageType.INFO,
                     buttons=Gtk.ButtonsType.OK,
                     text="Você já está com a versão mais recente do Google Drive."
+                )
+                dialog.run()
+                dialog.destroy()
+
+    def _on_check_github_updates(self, _):
+        if self.github_updater:
+            res = self.github_updater.check_update()
+            if res and res.get("has_update"):
+                dialog = Gtk.MessageDialog(
+                    message_type=Gtk.MessageType.INFO,
+                    buttons=Gtk.ButtonsType.OK,
+                    text=f"Nova melhoria do cliente Linux disponível: {res['new_version']}!"
+                )
+                dialog.format_secondary_text(f"Atualização: {res.get('title')}\nAplicando atualização...")
+                dialog.run()
+                dialog.destroy()
+                self.github_updater.apply_update(res)
+                self.github_updater.notify_user_and_restart(res)
+            else:
+                dialog = Gtk.MessageDialog(
+                    message_type=Gtk.MessageType.INFO,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="O programa Linux já está com as melhorias mais recentes do GitHub."
                 )
                 dialog.run()
                 dialog.destroy()

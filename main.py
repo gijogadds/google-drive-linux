@@ -103,6 +103,7 @@ class GoogleDriveDaemon:
             db=self.db,
             sync_worker=self.sync_worker,
             omaha_updater=self.updater,
+            github_updater=getattr(self, 'github_updater', None),
             on_open_settings=_open_settings
         )
 
