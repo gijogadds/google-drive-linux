@@ -35,8 +35,14 @@ Abaixo está o mapeamento exato de cada componente do repositório:
 
 ```
 google-drive-linux/
+├── .github/                            # Automações do GitHub e integração contínua
+│   ├── ISSUE_TEMPLATE/                 # Modelos padronizados para relatos de bugs e sugestões
+│   │   ├── bug_report.md               # Modelo estruturado para bugs com telemetria
+│   │   └── feature_request.md          # Modelo estruturado para melhorias
+│   └── workflows/
+│       └── ci.yml                      # Pipeline de CI/CD para testes e empacotamento .deb
 ├── core/                               # Núcleo da aplicação e motores de baixo nível
-│   ├── config.py                       # Gerenciador de configurações, caminhos de diretórios e padrões
+│   ├── config.py                       # Gerenciador de configurações, caminhos e suporte a HD externo
 │   ├── db.py                           # Camada ORM/SQLite para metadados, contas e filas de I/O
 │   ├── auth.py                         # Gerenciador de autenticação OAuth 2.0 PKCE com servidor local
 │   ├── api.py                          # Cliente oficial da Google Drive API v3 (Range requests e uploads)
@@ -45,14 +51,16 @@ google-drive-linux/
 │   ├── watcher.py                      # Fila assíncrona de sincronização e detecção de mudanças remotas
 │   ├── doc_launcher.py                 # Lançador de janelas dedicadas de aplicativo para Docs/Sheets
 │   ├── diagnostic.py                   # Sistema de telemetria, diagnóstico e abertura de Issues no GitHub
+│   ├── version.py                      # Controle de versão semântica e repositório
 │   └── mcp_server.py                   # Servidor MCP (Model Context Protocol) para IAs locais
 ├── ui/                                 # Camada de apresentação e interface com o desktop
 │   ├── indicator.py                    # AppIndicator para barra superior do Ubuntu (GNOME / KDE)
-│   └── webview_window.py               # Janela gráfica de configurações e conexão de contas
+│   └── webview_window.py               # Janela gráfica completa (Dashboard, Atividade, Notificações, Menus)
 ├── nautilus/                           # Integração com o explorador de arquivos do GNOME
 │   └── google_drive_nautilus.py        # Extensão Python para Nautilus: badges de status e menu de contexto
 ├── updater/                            # Subsistema de manutenção e atualização contínua
-│   └── omaha_updater.py                # Conector e avaliador de releases do Google Omaha v2/v3
+│   ├── omaha_updater.py                # Conector e avaliador de releases do Google Omaha v2/v3
+│   └── github_updater.py               # Monitor de correções do GitHub e auto-cura (self-healing)
 ├── assets/                             # Recursos visuais oficiais extraídos da distribuição
 │   ├── icons/                          # 155 ícones oficiais (Docs, Sheets, Slides, Drive) em PNG 256x256 e SVG
 │   └── html/                           # 111 telas oficiais de diálogos (dot.html, onboarding, sobre)
@@ -100,8 +108,16 @@ Quando instalado e em execução no Ubuntu, o cliente gerencia seus dados distri
 * Arquivos parciais em blocos: `chunk_0.bin` (0 a 16MB), `chunk_1.bin` (16 a 32MB), etc.
 * Arquivos completos (offline): `full.bin`.
 
-### C. Ponto de Montagem do Usuário (`~/GoogleDrive/`)
-* O diretório visível no gerenciador de arquivos (Nautilus), montado através do FUSE.
+### C. Ponto de Montagem do Usuário e Suporte a HD Externo
+* **Padrão:** O diretório visível no gerenciador de arquivos (Nautilus) é montado em `~/GoogleDrive/`.
+* **Personalização para HD Externo / SSD Secundário:**
+  O usuário tem liberdade total para escolher qualquer disco ou partição (ex: `/media/usuario/MeuHDExterno/GoogleDrive`) tanto para o **ponto de montagem** quanto para a **pasta de cache/arquivos offline**.
+  - **Via Interface Gráfica:** Acessível em *Preferências -> Configurar Pastas*, abrindo o seletor nativo do sistema (`Gtk.FileChooserNative`).
+  - **Via Linha de Comando (CLI):**
+    ```bash
+    gdrive-cli set-path --mount /media/usuario/HD_EXTERNO/GoogleDrive --cache /media/usuario/HD_EXTERNO/Cache
+    systemctl --user restart google-drive.service
+    ```
 
 ---
 
@@ -212,11 +228,15 @@ Ao ser disparado, o `gdrive-doc-launcher`:
 
 ---
 
-## 6. Subsistema de Auto-Atualização Oficial (Protocolo Google Omaha)
+## 6. Subsistema de Atualização Dual: Canal 1 (Google Omaha) e Canal 2 (GitHub)
 
+O cliente implementa uma arquitetura inédita de **atualização em dois canais complementares e independentes**:
+
+* **Canal 1 (Google Upstream - Protocolo Omaha):** Monitora os servidores mundiais de produção da Google (`update.googleapis.com`) para extrair silenciosamente novas telas de diálogo (`assets/html/`), novos ícones e recursos oficiais quando a Google atualizar a versão do Drive no Windows.
+* **Canal 2 (Repositório GitHub - Hotfixes e Melhorias Linux):** Monitora o repositório `gijogadds/google-drive-linux` para baixar correções de bugs reportados por issues, patches de estabilidade FUSE e melhorias no cliente Linux.
+
+### A. Canal 1: Fluxo de Verificação Periódico (Google Omaha)
 O módulo [`updater/omaha_updater.py`](file:///c:/Users/PlanetJet/Downloads/REA/google-drive-linux/updater/omaha_updater.py) implementa a comunicação com o mesmo servidor que atualiza o Google Drive mundialmente.
-
-### A. Fluxo de Verificação Periódico
 ```
 [ OmahaUpdater Thread ]
          |

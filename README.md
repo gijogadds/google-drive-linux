@@ -221,17 +221,25 @@ systemctl --user enable --now google-drive.service
 *O Google Drive será montado em `~/GoogleDrive` e o ícone de sincronização aparecerá na barra superior do Ubuntu.*
 
 ### 3. Comandos Úteis do Terminal (`gdrive-cli`)
-* **Verificar status da conta e armazenamento:**
+* **Verificar status da conta, cota e sincronização:**
   ```bash
   gdrive-cli status
   ```
-* **Verificar atualizações oficiais da Google:**
+* **Verificar atualizações oficiais da Google (Canal 1 - Omaha):**
   ```bash
   gdrive-cli update
   ```
+* **Verificar e aplicar correções de código do GitHub (Canal 2 - Hotfixes):**
+  ```bash
+  gdrive-cli upgrade
+  ```
+* **Alterar ponto de montagem ou pasta de cache (ex: HD Externo):**
+  ```bash
+  gdrive-cli set-path --mount /media/usuario/HD_EXTERNO/GoogleDrive --cache /media/usuario/HD_EXTERNO/Cache
+  ```
 * **Gerar relatório de diagnóstico e abrir Issue no GitHub:**
   ```bash
-  gdrive-cli report
+  gdrive-cli report -m "Descrição do problema"
   ```
 * **Iniciar servidor MCP para assistentes de IA:**
   ```bash
