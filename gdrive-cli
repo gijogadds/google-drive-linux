@@ -124,6 +124,25 @@ def cmd_upgrade(args):
         print("[CLI] O cliente já está na versão mais recente do GitHub.")
 
 
+def cmd_set_path(args):
+    cfg = load_config()
+    changed = False
+    if args.mount:
+        cfg["mount_point"] = os.path.abspath(os.path.expanduser(args.mount))
+        print(f"[CLI] Ponto de montagem alterado para: {cfg['mount_point']}")
+        changed = True
+    if args.cache:
+        cfg["cache_dir"] = os.path.abspath(os.path.expanduser(args.cache))
+        print(f"[CLI] Pasta de cache/offline alterada para: {cfg['cache_dir']}")
+        changed = True
+    if changed:
+        save_config(cfg)
+        print("[CLI] Configurações salvas! Reinicie o serviço para aplicar:")
+        print("      systemctl --user restart google-drive.service")
+    else:
+        print("Uso: gdrive-cli set-path --mount /caminho/hd_externa --cache /caminho/hd_externa/cache")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Google Drive para Linux - CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -134,6 +153,10 @@ def main():
     subparsers.add_parser("upgrade", help="Verifica e aplica correções de código diretamente do GitHub")
     subparsers.add_parser("mcp", help="Inicia o servidor MCP local para agentes de IA")
     subparsers.add_parser("report", help="Gera diagnóstico e abre Issue para resolução de problemas")
+
+    parser_path = subparsers.add_parser("set-path", help="Configura diretório de montagem ou cache (ex: HD Externa)")
+    parser_path.add_argument("--mount", help="Novo ponto de montagem (ex: /media/user/HD/GoogleDrive)")
+    parser_path.add_argument("--cache", help="Nova pasta de cache/offline (ex: /media/user/HD/Cache)")
 
     args = parser.parse_args()
     if args.command == "status":
@@ -148,6 +171,8 @@ def main():
         cmd_mcp(args)
     elif args.command == "report":
         cmd_report(args)
+    elif args.command == "set-path":
+        cmd_set_path(args)
     else:
         parser.print_help()
 

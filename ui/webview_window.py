@@ -93,14 +93,44 @@ class SettingsDialog:
         sync_box.pack_start(stream_rb, False, False, 0)
         sync_box.pack_start(mirror_rb, False, False, 0)
 
+        # Helper for folder browser
+        def _choose_folder(parent, entry):
+            dialog = Gtk.FileChooserDialog(
+                title="Selecione um Diretório (ex: na sua HD Externa)",
+                transient_for=parent,
+                action=Gtk.FileChooserAction.SELECT_FOLDER
+            )
+            dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
+            if dialog.run() == Gtk.ResponseType.OK:
+                entry.set_text(dialog.get_filename())
+            dialog.destroy()
+
         # Mount Point Entry
         path_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         path_label = Gtk.Label(label="Ponto de Montagem:")
         path_entry = Gtk.Entry()
         path_entry.set_text(self.config.get("mount_point", os.path.expanduser("~/GoogleDrive")))
+        btn_browse_mount = Gtk.Button(label="Procurar...")
+        btn_browse_mount.connect("clicked", lambda _: _choose_folder(window, path_entry))
+
         path_box.pack_start(path_label, False, False, 0)
         path_box.pack_start(path_entry, True, True, 0)
+        path_box.pack_start(btn_browse_mount, False, False, 0)
         sync_box.pack_start(path_box, False, False, 0)
+
+        # Cache & Offline Storage Directory (Ideal for External HD)
+        cache_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        cache_label = Gtk.Label(label="Pasta de Cache / Offline:")
+        cache_entry = Gtk.Entry()
+        default_cache = self.config.get("cache_dir", os.path.expanduser("~/.cache/google-drive-linux"))
+        cache_entry.set_text(default_cache)
+        btn_browse_cache = Gtk.Button(label="Procurar...")
+        btn_browse_cache.connect("clicked", lambda _: _choose_folder(window, cache_entry))
+
+        cache_box.pack_start(cache_label, False, False, 0)
+        cache_box.pack_start(cache_entry, True, True, 0)
+        cache_box.pack_start(btn_browse_cache, False, False, 0)
+        sync_box.pack_start(cache_box, False, False, 0)
 
         sync_frame.add(sync_box)
         vbox.pack_start(sync_frame, False, False, 0)
@@ -117,6 +147,7 @@ class SettingsDialog:
         def _save(_):
             self.config["sync_mode"] = "mirror" if mirror_rb.get_active() else "stream"
             self.config["mount_point"] = path_entry.get_text()
+            self.config["cache_dir"] = cache_entry.get_text()
             self.on_save(self.config)
             window.destroy()
 

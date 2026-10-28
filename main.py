@@ -71,7 +71,8 @@ class GoogleDriveDaemon:
                 db=self.db,
                 api=api,
                 chunk_size_mb=self.config.get("chunk_size_mb", 16),
-                max_cache_size_gb=self.config.get("max_cache_size_gb", 10)
+                max_cache_size_gb=self.config.get("max_cache_size_gb", 10),
+                cache_dir=self.config.get("cache_dir")
             )
 
             # Start Sync Worker
@@ -80,6 +81,11 @@ class GoogleDriveDaemon:
 
             # Start FUSE VFS Mount in a background thread
             mount_pt = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
+            try:
+                os.makedirs(mount_pt, exist_ok=True)
+            except Exception as e:
+                print(f"[Aviso] Não foi possível criar o diretório de montagem ({mount_pt}): {e}")
+                print("[Info] Se você configurou uma HD externa, certifique-se de que ela está conectada e montada.")
             self.fuse_thread = threading.Thread(
                 target=mount_fuse,
                 args=(mount_pt, self.db, cache, api, account_id),

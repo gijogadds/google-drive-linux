@@ -11,13 +11,14 @@ from core.config import CACHE_DIR, ensure_directories
 
 
 class CacheManager:
-    def __init__(self, db, api, chunk_size_mb: int = 16, max_cache_size_gb: int = 10):
+    def __init__(self, db, api, chunk_size_mb: int = 16, max_cache_size_gb: int = 10, cache_dir: Optional[str] = None):
         ensure_directories()
         self.db = db
         self.api = api
         self.chunk_size = chunk_size_mb * 1024 * 1024
         self.max_cache_bytes = max_cache_size_gb * 1024 * 1024 * 1024
-        self.cache_dir = CACHE_DIR
+        self.cache_dir = cache_dir or CACHE_DIR
+        os.makedirs(self.cache_dir, exist_ok=True)
 
     def _get_item_dir(self, item_id: str) -> str:
         d = os.path.join(self.cache_dir, item_id)

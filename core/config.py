@@ -24,6 +24,7 @@ DEFAULT_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET", "")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "mount_point": DEFAULT_MOUNT_POINT,
+    "cache_dir": CACHE_DIR,
     "sync_mode": "stream",  # 'stream' (on-demand) or 'mirror' (offline sync)
     "max_cache_size_gb": 10,
     "chunk_size_mb": 16,
