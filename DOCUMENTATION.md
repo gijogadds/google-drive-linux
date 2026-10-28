@@ -279,6 +279,42 @@ Antes de qualquer envio, a função `DiagnosticCollector.sanitize()` executa exp
 3. Se não houver token, ele formata o relatório em Markdown com codificação URI e abre o navegador na tela de criação de issues com os campos de título, ambiente, stack trace e logs já 100% preenchidos.
 4. O usuário recebe um alerta visual imediato via `notify-send`.
 
+### D. O Ciclo Fechado: Da Issue à Cura Automática no Ubuntu (Self-Healing Loop)
+
+Uma das maiores inovações do projeto é o **fechamento automático do ciclo de vida de bugs**. Uma vez que o erro é registrado no GitHub e corrigido pelo desenvolvedor, **o programa instalado na máquina do usuário recebe a atualização e se autocorrige automaticamente**:
+
+```
++-------------------------------------------------------------------------+
+| [1. MÁQUINA DO USUÁRIO]                                                 |
+| Ocorre um erro inesperado no VFS ou na sincronização.                   |
+| -> O hook global captura a exceção, sanitiza logs e tokens.             |
+| -> Cria uma Issue em github.com/gijogadds/google-drive-linux.           |
+| -> Dispara notificação no desktop informando sobre o incidente.         |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| [2. GITHUB / DESENVOLVEDOR / IA]                                        |
+| O desenvolvedor ou IA inspeciona a Issue, identifica o bug,             |
+| implementa a correção e sobe o commit para a branch `main` ou           |
+| publica uma nova versão (ex: Release v1.0.1).                           |
++-------------------------------------------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| [3. MÁQUINA DO USUÁRIO - ATUALIZADOR AUTOMÁTICO (GitHubUpdater)]        |
+| O thread de fundo `updater/github_updater.py` consulta a API do GitHub. |
+| -> Detecta o novo commit / release publicado.                           |
+| -> Baixa o pacote compactado diretamente do repositório.                |
+| -> Substitui silenciosamente os arquivos corrigidos em /opt.            |
+| -> Executa: systemctl --user restart google-drive.service               |
+| -> Exibe notificação no desktop:                                        |
+|    "Google Drive Atualizado! A correção foi aplicada com sucesso."      |
++-------------------------------------------------------------------------+
+```
+
+O usuário não precisa abrir terminal, reinstalar nem executar comandos manuais: o cliente detecta a correção no repositório, aplica o patch e se restabelece sozinho.
+
 ---
 
 ## 8. Servidor Integrado de Model Context Protocol (MCP) para Agentes de IA

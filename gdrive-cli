@@ -108,13 +108,30 @@ def cmd_report(args):
     print(f"      {url}")
 
 
+def cmd_upgrade(args):
+    from updater.github_updater import GitHubUpdater
+    print("[CLI] Verificando correções e novas versões no repositório GitHub...")
+    updater = GitHubUpdater()
+    res = updater.check_update()
+    if res and res.get("has_update"):
+        print(f"[CLI] Nova atualização/correção disponível: {res['new_version']}!")
+        print(f"      Descrição: {res.get('title')}")
+        applied = updater.apply_update(res)
+        if applied:
+            print("[CLI] Atualização aplicada com sucesso! Reiniciando serviço...")
+            updater.notify_user_and_restart(res)
+    else:
+        print("[CLI] O cliente já está na versão mais recente do GitHub.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Google Drive para Linux - CLI")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("status", help="Exibe status da conta e sincronização")
     subparsers.add_parser("login", help="Conecta uma nova conta Google no navegador")
-    subparsers.add_parser("update", help="Verifica novas versões oficiais da Google")
+    subparsers.add_parser("update", help="Verifica novas versões oficiais da Google (Omaha)")
+    subparsers.add_parser("upgrade", help="Verifica e aplica correções de código diretamente do GitHub")
     subparsers.add_parser("mcp", help="Inicia o servidor MCP local para agentes de IA")
     subparsers.add_parser("report", help="Gera diagnóstico e abre Issue para resolução de problemas")
 
@@ -125,6 +142,8 @@ def main():
         cmd_login(args)
     elif args.command == "update":
         cmd_update(args)
+    elif args.command == "upgrade":
+        cmd_upgrade(args)
     elif args.command == "mcp":
         cmd_mcp(args)
     elif args.command == "report":

@@ -20,6 +20,7 @@ from core.cache import CacheManager
 from core.vfs import mount_fuse
 from core.watcher import SyncWorker
 from updater.omaha_updater import OmahaUpdater
+from updater.github_updater import GitHubUpdater
 from ui.indicator import DriveTrayIndicator
 from ui.webview_window import SettingsDialog
 from core.diagnostic import install_global_crash_hook
@@ -50,7 +51,7 @@ class GoogleDriveDaemon:
 
         account_id = accounts[0]["account_id"] if accounts else None
 
-        # 1. Start Omaha Auto-Updater
+        # 1. Start Auto-Updaters (Dual Channel: Google Omaha & GitHub Releases/Hotfixes)
         if self.config.get("auto_update", True):
             interval = self.config.get("update_check_interval_hours", 12)
             self.updater = OmahaUpdater(
@@ -59,6 +60,9 @@ class GoogleDriveDaemon:
                 on_update_found=self._on_update_found
             )
             self.updater.start()
+
+            self.github_updater = GitHubUpdater(check_interval_hours=4)
+            self.github_updater.start()
 
         # 2. Start Sync Worker & VFS if account is connected
         if account_id:
@@ -122,6 +126,8 @@ class GoogleDriveDaemon:
             self.sync_worker.stop()
         if self.updater:
             self.updater.stop()
+        if hasattr(self, 'github_updater') and self.github_updater:
+            self.github_updater.stop()
         sys.exit(0)
 
 
