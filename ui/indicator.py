@@ -25,13 +25,14 @@ except Exception:
 
 
 class DriveTrayIndicator:
-    def __init__(self, config: dict, db, sync_worker, omaha_updater, github_updater=None, on_open_settings=None):
+    def __init__(self, config: dict, db, sync_worker, omaha_updater, github_updater=None, on_open_settings=None, on_open_home=None):
         self.config = config
         self.db = db
         self.sync_worker = sync_worker
         self.updater = omaha_updater
         self.github_updater = github_updater
         self.on_open_settings = on_open_settings
+        self.on_open_home = on_open_home
         self.indicator = None
         self.menu = None
 
@@ -86,7 +87,11 @@ class DriveTrayIndicator:
         menu.append(Gtk.SeparatorMenuItem())
 
         # 3. Actions
-        open_folder = Gtk.MenuItem(label="📂 Abrir pasta do Google Drive")
+        open_home = Gtk.MenuItem(label="🏠 Abrir Google Drive (Início)")
+        open_home.connect("activate", lambda _: self.on_open_home() if self.on_open_home else None)
+        menu.append(open_home)
+
+        open_folder = Gtk.MenuItem(label="📂 Abrir pasta de arquivos no Drive")
         open_folder.connect("activate", self._on_open_folder)
         menu.append(open_folder)
 

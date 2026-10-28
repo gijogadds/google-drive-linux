@@ -37,11 +37,12 @@ apt-get install -y \
     python3-gi-cairo \
     gir1.2-gtk-3.0 \
     gir1.2-ayatanaappindicator3-0.1 \
+    gir1.2-webkit2-4.0 \
     fuse3 \
     python3-fusepy \
     python3-nautilus \
     libsecret-1-0 \
-    xclip
+    xclip || apt-get install -y gir1.2-webkit2-4.1
 
 # Garantir permissões do FUSE
 modprobe fuse || true
@@ -73,8 +74,14 @@ NAUTILUS_EXT_DIR="/usr/share/nautilus-python/extensions"
 mkdir -p "${NAUTILUS_EXT_DIR}"
 cp "${INSTALL_DIR}/nautilus/google_drive_nautilus.py" "${NAUTILUS_EXT_DIR}/"
 
-echo -e "${BLUE}[5/6] Instalando atalho de aplicativo na Área de Trabalho e Menu...${NC}"
+echo -e "${BLUE}[5/6] Instalando atalhos e ícones de aplicativo na Área de Trabalho e Menu...${NC}"
 cp "${SCRIPT_DIR}/packaging/desktop/google-drive.desktop" /usr/share/applications/
+mkdir -p /usr/share/icons/hicolor/256x256/apps/
+cp "${INSTALL_DIR}/assets/icons/drive_fs.png" /usr/share/icons/hicolor/256x256/apps/google-drive.png
+cp "${INSTALL_DIR}/assets/icons/docs.png" /usr/share/icons/hicolor/256x256/apps/google-docs.png
+cp "${INSTALL_DIR}/assets/icons/sheets.png" /usr/share/icons/hicolor/256x256/apps/google-sheets.png
+cp "${INSTALL_DIR}/assets/icons/slides.png" /usr/share/icons/hicolor/256x256/apps/google-slides.png
+gtk-update-icon-cache /usr/share/icons/hicolor || true
 
 echo -e "${BLUE}[6/6] Configurando serviço de inicialização automática no systemd...${NC}"
 USER_SYSTEMD_DIR="${USER_HOME}/.config/systemd/user"

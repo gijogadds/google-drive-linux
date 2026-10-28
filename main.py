@@ -22,7 +22,7 @@ from core.watcher import SyncWorker
 from updater.omaha_updater import OmahaUpdater
 from updater.github_updater import GitHubUpdater
 from ui.indicator import DriveTrayIndicator
-from ui.webview_window import SettingsDialog
+from ui.webview_window import SettingsDialog, GoogleDriveHomeWindow
 from core.diagnostic import install_global_crash_hook
 
 
@@ -104,13 +104,23 @@ class GoogleDriveDaemon:
             dialog = SettingsDialog(self.config, self.auth, self._on_settings_saved)
             dialog.show()
 
+        def _open_home():
+            home = GoogleDriveHomeWindow(
+                config=self.config,
+                db=self.db,
+                sync_worker=self.sync_worker,
+                on_open_settings=_open_settings
+            )
+            home.show()
+
         indicator = DriveTrayIndicator(
             config=self.config,
             db=self.db,
             sync_worker=self.sync_worker,
             omaha_updater=self.updater,
             github_updater=getattr(self, 'github_updater', None),
-            on_open_settings=_open_settings
+            on_open_settings=_open_settings,
+            on_open_home=_open_home
         )
 
         try:
