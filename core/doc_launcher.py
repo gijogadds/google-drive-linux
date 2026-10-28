@@ -11,7 +11,7 @@ from typing import Optional, List
 
 
 def find_browser_for_app_mode() -> Optional[str]:
-    """Find a Chromium-based browser supporting the --app flag in Linux."""
+    """Find a Chromium-based browser supporting the --app flag in Linux (APT, Snap or Flatpak)."""
     candidates = [
         "google-chrome",
         "google-chrome-stable",
@@ -21,10 +21,25 @@ def find_browser_for_app_mode() -> Optional[str]:
         "microsoft-edge-stable",
         "microsoft-edge"
     ]
+    # Check standard PATH
     for b in candidates:
         path = shutil.which(b)
         if path:
             return path
+
+    # Check Ubuntu Snap and Flatpak common absolute paths
+    snap_paths = [
+        "/snap/bin/chromium",
+        "/snap/bin/google-chrome",
+        "/snap/bin/brave",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/google-chrome"
+    ]
+    for sp in snap_paths:
+        if os.path.exists(sp) and os.access(sp, os.X_OK):
+            return sp
+
     return None
 
 

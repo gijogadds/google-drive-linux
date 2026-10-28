@@ -107,6 +107,7 @@ class MetadataDB:
     # --- Item CRUD ---
     def upsert_item(self, item_data: Dict[str, Any]):
         defaults = {
+            "account_id": "",
             "mime_type": "",
             "is_directory": 0,
             "size": 0,

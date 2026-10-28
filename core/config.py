@@ -68,3 +68,15 @@ def save_config(config: Dict[str, Any]):
     ensure_directories()
     with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+
+
+def get_mount_point() -> str:
+    """Return active mount point (supporting external HDs and custom paths)."""
+    cfg = load_config()
+    return cfg.get("mount_point", DEFAULT_MOUNT_POINT)
+
+
+def get_cache_dir() -> str:
+    """Return active cache directory (supporting external HDs and custom paths)."""
+    cfg = load_config()
+    return cfg.get("cache_dir", CACHE_DIR)

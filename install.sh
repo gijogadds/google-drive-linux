@@ -28,8 +28,10 @@ USER_HOME=$(eval echo "~$TARGET_USER")
 INSTALL_DIR="/opt/google-drive-linux"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo -e "${BLUE}[1/6] Instalando dependências do sistema via APT...${NC}"
+echo -e "${BLUE}[1/6] Instalando dependências do sistema via APT (Ubuntu 20.04 / 22.04 / 24.04 / 26.04+)...${NC}"
 apt-get update -qq
+
+# Instalação dos pacotes essenciais de sistema
 apt-get install -y \
     python3 \
     python3-pip \
@@ -37,12 +39,18 @@ apt-get install -y \
     python3-gi-cairo \
     gir1.2-gtk-3.0 \
     gir1.2-ayatanaappindicator3-0.1 \
-    gir1.2-webkit2-4.0 \
     fuse3 \
-    python3-fusepy \
     python3-nautilus \
     libsecret-1-0 \
-    xclip || apt-get install -y gir1.2-webkit2-4.1
+    xclip || true
+
+# WebKit2 GTK (4.1 para Ubuntu 22.04 / 24.04 / 26.04+, ou 4.0 para Ubuntu 20.04)
+apt-get install -y gir1.2-webkit2-4.1 || apt-get install -y gir1.2-webkit2-4.0 || true
+
+# Suporte ao FUSE Python (compatível com PEP 668 no Ubuntu 24.04 e 26.04)
+if ! python3 -c "import fuse" 2>/dev/null; then
+    apt-get install -y python3-fusepy || pip3 install --break-system-packages fusepy || pip3 install fusepy || true
+fi
 
 # Garantir permissões do FUSE
 modprobe fuse || true

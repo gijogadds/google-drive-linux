@@ -29,13 +29,32 @@ except (ValueError, ImportError):
                 pass
 
 METADATA_DB_PATH = os.path.expanduser("~/.config/google-drive-linux/metadata.db")
+CONFIG_PATH = os.path.expanduser("~/.config/google-drive-linux/config.json")
 DEFAULT_MOUNT_POINT = os.path.expanduser("~/GoogleDrive")
+
+
+def get_active_mount_point() -> str:
+    """Read the user's active mount point, supporting custom paths and external HDs."""
+    if os.path.exists(CONFIG_PATH):
+        try:
+            import json
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                custom_mount = data.get("mount_point")
+                if custom_mount:
+                    return os.path.abspath(os.path.expanduser(custom_mount))
+        except Exception:
+            pass
+    return DEFAULT_MOUNT_POINT
 
 
 class GoogleDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoProvider):
     def __init__(self):
         super().__init__()
-        self.mount_point = DEFAULT_MOUNT_POINT
+
+    @property
+    def mount_point(self) -> str:
+        return get_active_mount_point()
 
     def _get_item_status(self, file_path: str):
         if not os.path.exists(METADATA_DB_PATH):
