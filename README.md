@@ -4,6 +4,10 @@ Cliente nativo e de alta performance do **Google Drive para Ubuntu e distribuiç
 
 Oferece **paridade total de recursos** em relação ao cliente do Windows, incluindo **streaming de arquivos sob demanda via FUSE**, **janelas de aplicativo dedicadas para Google Docs/Sheets/Slides**, **servidor MCP integrado para IA local**, **sistema de verificação de atualização oficial da Google (Protocolo Omaha)** e **sistema automatizado de diagnóstico e abertura de Issues no GitHub**.
 
+> 📚 **Documentação Técnica Detalhada:**
+> * 📘 [**DOCUMENTATION.md**](DOCUMENTATION.md) — Manual técnico completo de arquitetura, subsistemas de sincronização, VFS, telemetria de logs e auditoria.
+> * 🔬 [**REA.md**](REA.md) — Estudo aprofundado de engenharia reversa dos binários do Windows (`GoogleDriveSetup.exe` e Dokan Driver).
+
 ---
 
 ## 📑 Sumário
