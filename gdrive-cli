@@ -101,8 +101,9 @@ def cmd_mcp(args):
 
 def cmd_report(args):
     from core.diagnostic import CrashReporter
-    print("[CLI] Coletando diagnóstico do sistema e estado do Google Drive...")
-    report = CrashReporter.generate_report(custom_notes="Relatório manual enviado via CLI")
+    notes = getattr(args, "message", None) or "Relatório manual enviado via CLI"
+    print(f"[CLI] Coletando diagnóstico do sistema e estado do Google Drive...")
+    report = CrashReporter.generate_report(custom_notes=notes)
     url = CrashReporter.report_issue(report)
     print(f"[CLI] Relatório gerado! Abrindo para envio da Issue no GitHub:")
     print(f"      {url}")
@@ -152,7 +153,8 @@ def main():
     subparsers.add_parser("update", help="Verifica novas versões oficiais da Google (Omaha)")
     subparsers.add_parser("upgrade", help="Verifica e aplica correções de código diretamente do GitHub")
     subparsers.add_parser("mcp", help="Inicia o servidor MCP local para agentes de IA")
-    subparsers.add_parser("report", help="Gera diagnóstico e abre Issue para resolução de problemas")
+    parser_rep = subparsers.add_parser("report", help="Gera diagnóstico e abre Issue para resolução de problemas")
+    parser_rep.add_argument("-m", "--message", help="Mensagem ou descrição do problema observado (opcional)", default=None)
 
     parser_path = subparsers.add_parser("set-path", help="Configura diretório de montagem ou cache (ex: HD Externa)")
     parser_path.add_argument("--mount", help="Novo ponto de montagem (ex: /media/user/HD/GoogleDrive)")

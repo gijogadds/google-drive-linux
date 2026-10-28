@@ -544,9 +544,62 @@ class GoogleDriveHomeWindow:
             webbrowser.open(f"https://drive.google.com/drive/search?q={query}")
 
     def _on_send_feedback(self):
-        from core.diagnostic import CrashReporter
-        report = CrashReporter.generate_report(custom_notes="Feedback do usuário")
-        CrashReporter.report_issue(report)
+        if not HAS_GTK:
+            from core.diagnostic import CrashReporter
+            report = CrashReporter.generate_report(custom_notes="Feedback do usuário")
+            CrashReporter.report_issue(report)
+            return
+
+        dialog = Gtk.Dialog(
+            title="Enviar Feedback / Relatar Problema ao GitHub",
+            transient_for=self.window,
+            flags=0
+        )
+        dialog.add_buttons(
+            "Cancelar", Gtk.ResponseType.CANCEL,
+            "Enviar Relatório e Abrir Issue", Gtk.ResponseType.OK
+        )
+        dialog.set_default_size(500, 300)
+
+        box = dialog.get_content_area()
+        box.set_spacing(10)
+        box.set_margin_top(15)
+        box.set_margin_bottom(15)
+        box.set_margin_start(18)
+        box.set_margin_end(18)
+
+        lbl_desc = Gtk.Label()
+        lbl_desc.set_markup("<b>Relatar Problema / Diagnóstico do Sistema</b>\n"
+                            "<small>Um diagnóstico técnico (versão do kernel, status do FUSE, logs recentes) "
+                            "será empacotado de forma sanitizada (sem senhas ou tokens) e enviado ao repositório "
+                            "para análise e correção automática.</small>")
+        lbl_desc.set_line_wrap(True)
+        lbl_desc.set_alignment(0, 0)
+        box.pack_start(lbl_desc, False, False, 0)
+
+        lbl_prompt = Gtk.Label(label="Descreva o que ocorreu ou o comportamento esperado (opcional):")
+        lbl_prompt.set_alignment(0, 0.5)
+        box.pack_start(lbl_prompt, False, False, 0)
+
+        entry = Gtk.TextView()
+        entry.set_wrap_mode(Gtk.WrapMode.WORD)
+        entry.get_buffer().set_text("")
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(100)
+        scroll.add(entry)
+        box.pack_start(scroll, True, True, 0)
+
+        dialog.show_all()
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            buf = entry.get_buffer()
+            notes = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True).strip()
+            if not notes:
+                notes = "Relatório de diagnóstico gerado sob demanda pelo usuário."
+            from core.diagnostic import CrashReporter
+            report = CrashReporter.generate_report(custom_notes=notes)
+            CrashReporter.report_issue(report)
+        dialog.destroy()
 
     def _show_about_dialog(self):
         dialog = Gtk.AboutDialog(
@@ -561,15 +614,28 @@ class GoogleDriveHomeWindow:
         dialog.destroy()
 
     def _show_error_list_dialog(self):
+        if not HAS_GTK:
+            return
+
         dialog = Gtk.MessageDialog(
             transient_for=self.window,
             message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK,
+            buttons=Gtk.ButtonsType.NONE,
             text="Lista de Erros de Sincronização"
         )
-        dialog.format_secondary_text("Nenhum erro de sincronização encontrado. Todos os seus arquivos estão sincronizados.")
-        dialog.run()
+        dialog.add_buttons(
+            "Fechar", Gtk.ResponseType.CLOSE,
+            "Gerar Diagnóstico / Abrir Issue", Gtk.ResponseType.OK
+        )
+        dialog.format_secondary_text(
+            "Nenhum erro de sincronização crítico encontrado no momento.\n"
+            "Se você estiver enfrentando algum comportamento inesperado, pode gerar um relatório "
+            "de diagnóstico sanitizado para análise no GitHub."
+        )
+        res = dialog.run()
         dialog.destroy()
+        if res == Gtk.ResponseType.OK:
+            self._on_send_feedback()
 
     def _show_offline_files_dialog(self):
         dialog = Gtk.MessageDialog(

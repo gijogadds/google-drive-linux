@@ -272,12 +272,22 @@ Antes de qualquer envio, a função `DiagnosticCollector.sanitize()` executa exp
 * `client_secret: "..."` $\rightarrow$ `client_secret: [REDACTED_SECRET]`
 * E-mails de usuários são mascarados para preservar a privacidade.
 
-### C. Geração de Relatório e Submissão da Issue
-1. Um pacote JSON completo é gravado em `~/.config/google-drive-linux/crash_reports/report_<timestamp>.json`.
-2. Se a variável `GITHUB_TOKEN` estiver definida, o cliente faz um `POST` direto para:
-   `https://api.github.com/repos/gijogadds/google-drive-linux/issues`
-3. Se não houver token, ele formata o relatório em Markdown com codificação URI e abre o navegador na tela de criação de issues com os campos de título, ambiente, stack trace e logs já 100% preenchidos.
-4. O usuário recebe um alerta visual imediato via `notify-send`.
+### C. Geração de Relatório e Submissão da Issue (Automática e Manual sob Demanda)
+
+O sistema de diagnóstico do **Canal 2** pode ser acionado tanto de forma **100% automática** quanto **manualmente a qualquer momento pelo usuário**:
+
+1. **Modo Automático (Detecção Proativa de Falhas):**
+   - Caso ocorra uma exceção não capturada ou encerramento inesperado em qualquer thread do daemon, o hook global intercepta imediatamente o traceback, coleta o estado das tabelas SQLite e os últimos 50 registros de log.
+   - Gera o arquivo local em `~/.config/google-drive-linux/crash_reports/report_<timestamp>.json`.
+   - Se a variável `GITHUB_TOKEN` estiver definida, realiza o `POST` silencioso na API do GitHub. Caso contrário, gera a URL pré-preenchida no navegador padrão e dispara uma notificação do desktop no Ubuntu (`notify-send`).
+
+2. **Modo Manual sob Demanda (Acionado pelo Usuário):**
+   - **Pela Interface Gráfica (Menu da Engrenagem ⚙️):**
+     Ao clicar em *"Enviar feedback / Relatar Erro"* ou em *"Lista de erros"*, o aplicativo abre uma janela interativa onde o usuário pode digitar observações sobre o problema observado antes do envio.
+   - **Pela Bandeja do Sistema (System Tray):**
+     Clicando com o botão direito no ícone do Google Drive e selecionando *"🐛 Relatar Problema / Diagnóstico..."*.
+   - **Pelo Terminal (CLI):**
+     Executando `gdrive-cli report -m "Descrição do problema"`. O CLI empacota todas as métricas do sistema e abre a submissão imediatamente no navegador.
 
 ### D. O Ciclo Fechado: Da Issue à Cura Automática no Ubuntu (Self-Healing Loop)
 

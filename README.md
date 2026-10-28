@@ -88,23 +88,26 @@ O cliente mantém-se atualizado conectando-se diretamente ao servidor de produç
 
 ---
 
-## 5. Sistema de Coleta de Logs e Abertura Automática de Issues
+## 5. Sistema de Coleta de Logs, Diagnóstico e Issues no GitHub (Canal 2)
 
-Para garantir suporte contínuo e resolução imediata de problemas, o projeto conta com um subsistema completo de telemetria e diagnóstico inspirado no `Crashpad` da Google:
+Para garantir suporte contínuo e resolução imediata de problemas, o projeto conta com um subsistema completo de telemetria e diagnóstico inspirado no `Crashpad` e `diagnostic_tool.exe` da Google, funcionando em dois modos:
 
-1. **Captura Global de Exceções (`install_global_crash_hook`):**
-   * Qualquer falha não tratada em threads de sincronização ou no VFS é imediatamente capturada.
-2. **Sanitização de Dados Privados:**
-   * Tokens OAuth, chaves de API, senhas e identificadores pessoais são mascarados automaticamente (`[REDACTED_TOKEN]`).
-3. **Notificação Nativa no Desktop:**
-   * Utiliza `notify-send` na área de trabalho do Ubuntu informando que um diagnóstico foi gerado.
-4. **Criação Automática de Issue no GitHub:**
-   * Gera uma Issue diretamente no repositório com título descritivo, informações completas do sistema (Distribuição, Kernel, Python, Interface Gráfica), estado das filas e stack trace formatado.
-   * Pode ser acionado manualmente a qualquer momento pelo comando:
-     ```bash
-     gdrive-cli report
-     ```
-   * Ou através do menu da bandeja: **"🐛 Relatar Problema / Diagnóstico..."**.
+### A. Coleta e Submissão 100% Automática (Em caso de Falha Não Tratada)
+* **Captura Global de Exceções (`install_global_crash_hook`):** Qualquer falha não tratada em threads de sincronização ou no VFS é imediatamente capturada.
+* **Sanitização de Dados Privados:** Tokens OAuth (`Bearer`), chaves de API, senhas e identificadores pessoais são mascarados automaticamente (`[REDACTED_TOKEN]`).
+* **Abertura de Issue e Notificação:** O erro é empacotado em JSON, salvo localmente em `~/.config/google-drive-linux/crash_reports/` e submetido ao GitHub com notificação nativa via `notify-send`.
+
+### B. Geração Manual sob Demanda (A Qualquer Momento pelo Usuário)
+O usuário pode gerar relatórios de diagnóstico e relatar dúvidas/problemas quando quiser por 3 caminhos:
+1. **Pelo Menu da Engrenagem ⚙️ na Janela:** Clicando em *"Enviar feedback / Relatar Erro"* ou *"Lista de erros"*, onde surge um diálogo para digitar observações.
+2. **Pela Bandeja do Sistema (Systray):** Clicando com o botão direito no ícone do Drive e selecionando *"🐛 Relatar Problema / Diagnóstico..."*.
+3. **Pela Linha de Comando (CLI):**
+   ```bash
+   gdrive-cli report -m "Descrição do problema ou comportamento observado"
+   ```
+
+### C. Ciclo Fechado de Auto-Cura (Self-Healing)
+Assim que o problema é corrigido e o commit/release é enviado para a branch `main` do GitHub, o daemon do usuário detecta a atualização via `GitHubUpdater`, baixa silenciosamente os patches e reinicia o serviço com `systemctl --user restart google-drive.service`, restabelecendo o funcionamento sem necessidade de comandos manuais ou reinicialização da máquina.
 
 ---
 

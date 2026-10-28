@@ -111,8 +111,14 @@ class CrashReporter:
         app_state = DiagnosticCollector.collect_app_state()
         logs = DiagnosticCollector.sanitize(DiagnosticCollector.get_recent_logs())
 
+        title_str = "Relatório de Diagnóstico sob Demanda"
+        if exc_value:
+            title_str = f"Crash: {exc_value}"
+        elif custom_notes and custom_notes.strip():
+            title_str = f"Diagnóstico: {custom_notes.strip()[:60]}"
+
         report = {
-            "title": f"Crash: {exc_value}" if exc_value else "Relatório de Diagnóstico Automático",
+            "title": title_str,
             "system_info": sys_info,
             "app_state": app_state,
             "traceback": DiagnosticCollector.sanitize(tb_str),
@@ -135,12 +141,18 @@ class CrashReporter:
         sys_info = report["system_info"]
         app_state = report["app_state"]
 
-        title = f"[Automated Bug Report] {report['title'][:80]}"
-        body = f"""### 🚨 Relatório de Diagnóstico Automático do Google Drive Linux
+        title = f"[Diagnóstico] {report['title'][:80]}"
+        
+        notes_section = ""
+        if report.get("custom_notes") and report["custom_notes"].strip():
+            notes_section = f"""#### 📝 Observações / Mensagem do Usuário
+{report['custom_notes'].strip()}
 
-Um erro inesperado ou solicitação de diagnóstico foi registrada automaticamente pelo cliente.
+"""
 
-#### 🖥️ Informações do Sistema
+        body = f"""### 🚨 Relatório de Diagnóstico do Google Drive Linux
+
+{notes_section}#### 🖥️ Informações do Sistema
 * **Distribuição:** `{sys_info.get('linux_distro', sys_info.get('os_name'))}`
 * **Kernel:** `{sys_info.get('os_release')}` ({sys_info.get('architecture')})
 * **Interface Gráfica (DE):** `{sys_info.get('desktop_env')}` ({sys_info.get('session_type')})
@@ -163,7 +175,7 @@ Um erro inesperado ou solicitação de diagnóstico foi registrada automaticamen
 ```
 
 ---
-*Relatório gerado automaticamente pelo módulo `core/diagnostic.py`.*
+*Relatório gerado pelo módulo `core/diagnostic.py` (Automático ou Manual sob demanda).*
 """
         return title, body
 
