@@ -1,0 +1,14 @@
+[Unit]
+Description=Google Drive para Linux (Ubuntu) Daemon
+After=network-online.target graphical-session.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/google-drive-linux/main.py
+Restart=on-failure
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

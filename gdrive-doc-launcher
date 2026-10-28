@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""
+Google Drive for Linux - Standalone App Window Launcher CLI
+"""
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from core.doc_launcher import launch_doc_as_app
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Uso: gdrive-doc-launcher <ID_DO_ARQUIVO_OU_URL> [doc|sheet|slide|form]")
+        sys.exit(1)
+
+    target = sys.argv[1]
+    doc_type = sys.argv[2] if len(sys.argv) > 2 else "doc"
+    launch_doc_as_app(target, doc_type)

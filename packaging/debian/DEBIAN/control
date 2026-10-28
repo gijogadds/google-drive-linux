@@ -1,0 +1,11 @@
+Package: google-drive-linux
+Version: 133.0.2-1
+Section: net
+Priority: optional
+Architecture: all
+Maintainer: PlanetJet <planetjet@localhost>
+Depends: python3 (>= 3.8), python3-gi, python3-pip, fuse3, python3-fusepy, python3-nautilus, gir1.2-ayatanaappindicator3-0.1, libsecret-1-0
+Description: Cliente nativo do Google Drive para Ubuntu e distribuições Linux
+ Oferece streaming de arquivos sob demanda via FUSE, sincronização offline (mirror),
+ extensão de status para o Nautilus, ícone de bandeja para o GNOME e sistema
+ integrado de verificação de atualizações oficiais da Google via protocolo Omaha.

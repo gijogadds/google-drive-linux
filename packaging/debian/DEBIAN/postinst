@@ -1,0 +1,23 @@
+#!/bin/bash
+set -e
+
+# Make executables
+chmod +x /opt/google-drive-linux/main.py
+chmod +x /opt/google-drive-linux/gdrive-cli
+chmod +x /opt/google-drive-linux/gdrive-doc-launcher
+ln -sf /opt/google-drive-linux/gdrive-cli /usr/local/bin/gdrive-cli
+ln -sf /opt/google-drive-linux/gdrive-doc-launcher /usr/local/bin/gdrive-doc-launcher
+
+# Install Nautilus Extension
+mkdir -p /usr/share/nautilus-python/extensions/
+cp /opt/google-drive-linux/nautilus/google_drive_nautilus.py /usr/share/nautilus-python/extensions/
+
+# Install Desktop file
+cp /opt/google-drive-linux/packaging/desktop/google-drive.desktop /usr/share/applications/
+
+# Restart Nautilus if running
+nautilus -q || true
+
+echo "Google Drive para Linux instalado com sucesso!"
+echo "Execute 'gdrive-cli login' para conectar sua conta."
+exit 0

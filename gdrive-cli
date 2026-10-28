@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""
+Google Drive for Linux - Command Line Interface (CLI)
+Provides command line management for status, sync, pinning, and updates.
+"""
+import sys
+import os
+import argparse
+import json
+
+# Ensure project root is in python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from core.config import load_config, save_config, DEFAULT_MOUNT_POINT
+from core.db import MetadataDB
+from core.auth import AuthManager
+from updater.omaha_updater import OmahaUpdater
+from core.mcp_server import run_stdio_mcp_server
+from core.cache import CacheManager
+from core.api import DriveAPI
+
+
+def cmd_status(args):
+    db = MetadataDB()
+    accounts = db.get_accounts()
+    print("==========================================")
+    print("      GOOGLE DRIVE FOR LINUX (UBUNTU)     ")
+    print("==========================================")
+    if not accounts:
+        print("Status: Nenhuma conta conectada.")
+        print("Execute: gdrive-cli login para conectar.")
+        return
+
+    for acc in accounts:
+        print(f"Conta: {acc.get('email')} ({acc.get('display_name')})")
+        used_gb = acc.get("storage_used", 0) / (1024**3)
+        total_gb = acc.get("storage_total", 0) / (1024**3)
+        if total_gb > 0:
+            print(f"Armazenamento: {used_gb:.2f} GB de {total_gb:.2f} GB ({ (used_gb/total_gb)*100:.1f}%)")
+    
+    cfg = load_config()
+    print(f"Ponto de Montagem: {cfg.get('mount_point')}")
+    print(f"Modo: {cfg.get('sync_mode')}")
+    
+    ops = db.get_pending_operations()
+    print(f"Operações Pendentes de Envio: {len(ops)}")
+    print("==========================================")
+
+
+def cmd_login(args):
+    auth = AuthManager()
+    print("[CLI] Iniciando fluxo de autenticação OAuth...")
+    acc = auth.login_interactive()
+    if acc:
+        print(f"[CLI] Sucesso! Conta conectada: {acc.get('email')}")
+        db = MetadataDB()
+        db.upsert_account({
+            "account_id": acc["account_id"],
+            "email": acc["email"],
+            "display_name": acc.get("display_name", ""),
+            "photo_url": acc.get("photo_url", ""),
+            "storage_total": 0,
+            "storage_used": 0,
+            "is_active": 1,
+            "auth_data": json.dumps(acc.get("tokens", {})),
+            "last_sync": 0
+        })
+    else:
+        print("[CLI] Falha ao autenticar.")
+
+
+def cmd_update(args):
+    print("[CLI] Verificando atualizações no servidor oficial da Google (Omaha)...")
+    updater = OmahaUpdater()
+    res = updater.check_update()
+    if res and res.get("has_update"):
+        print("==========================================")
+        print("  NOVA VERSÃO OFICIAL DO GOOGLE DRIVE!   ")
+        print("==========================================")
+        print(f"Versão mais recente: {res['latest_version']}")
+        print(f"Tamanho do pacote: {res.get('size_bytes', 0) // (1024*1024)} MB")
+        print(f"URL: {res.get('download_url')}")
+        print(f"SHA-256: {res.get('sha256')}")
+        print("==========================================")
+    else:
+        print("[CLI] O sistema já está na versão mais recente.")
+
+
+def cmd_mcp(args):
+    db = MetadataDB()
+    auth = AuthManager()
+    accounts = db.get_accounts()
+    if not accounts:
+        sys.stderr.write("Nenhuma conta conectada para o MCP Server.\n")
+        sys.exit(1)
+    acc_id = accounts[0]["account_id"]
+    api = DriveAPI(auth, acc_id)
+    cache = CacheManager(db, api)
+    run_stdio_mcp_server(db, cache)
+
+
+def cmd_report(args):
+    from core.diagnostic import CrashReporter
+    print("[CLI] Coletando diagnóstico do sistema e estado do Google Drive...")
+    report = CrashReporter.generate_report(custom_notes="Relatório manual enviado via CLI")
+    url = CrashReporter.report_issue(report)
+    print(f"[CLI] Relatório gerado! Abrindo para envio da Issue no GitHub:")
+    print(f"      {url}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Google Drive para Linux - CLI")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("status", help="Exibe status da conta e sincronização")
+    subparsers.add_parser("login", help="Conecta uma nova conta Google no navegador")
+    subparsers.add_parser("update", help="Verifica novas versões oficiais da Google")
+    subparsers.add_parser("mcp", help="Inicia o servidor MCP local para agentes de IA")
+    subparsers.add_parser("report", help="Gera diagnóstico e abre Issue para resolução de problemas")
+
+    args = parser.parse_args()
+    if args.command == "status":
+        cmd_status(args)
+    elif args.command == "login":
+        cmd_login(args)
+    elif args.command == "update":
+        cmd_update(args)
+    elif args.command == "mcp":
+        cmd_mcp(args)
+    elif args.command == "report":
+        cmd_report(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

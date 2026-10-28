@@ -1,0 +1,19 @@
+[Desktop Entry]
+Name=Google Drive
+GenericName=Armazenamento em Nuvem
+Comment=Acesse e sincronize seus arquivos do Google Drive
+Exec=/opt/google-drive-linux/main.py
+Icon=/opt/google-drive-linux/assets/icons/drive_logo_24px.svg
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Office;
+StartupNotify=true
+Actions=OpenFolder;Settings;
+
+[Desktop Action OpenFolder]
+Name=Abrir Pasta do Drive
+Exec=xdg-open %h/GoogleDrive
+
+[Desktop Action Settings]
+Name=Preferências
+Exec=/opt/google-drive-linux/gdrive-cli status
