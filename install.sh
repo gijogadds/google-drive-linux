@@ -55,10 +55,18 @@ if ! python3 -c "import fuse" 2>/dev/null; then
     apt-get install -y python3-fusepy || pip3 install --break-system-packages fusepy || pip3 install fusepy || true
 fi
 
-# Garantir permissões do FUSE
+# Garantir permissões do FUSE e suporte a montagem em HDs externos (/run/media/...) no AppArmor (Ubuntu 24.04/26.04+)
 modprobe fuse || true
 if [ -f /etc/fuse.conf ]; then
     sed -i 's/#user_allow_other/user_allow_other/' /etc/fuse.conf || true
+fi
+if [ -f /etc/apparmor.d/fusermount3 ]; then
+    mkdir -p /etc/apparmor.d/local
+    cat << 'EOF' > /etc/apparmor.d/local/fusermount3
+mount fstype=@{fuse_types} options=(nosuid,nodev) options in (ro,rw,noatime,dirsync,nodiratime,noexec,sync) -> /run/media/**/,
+umount /run/media/**/,
+EOF
+    apparmor_parser -r /etc/apparmor.d/fusermount3 2>/dev/null || true
 fi
 
 echo -e "${BLUE}[2/6] Copiando arquivos do aplicativo para ${INSTALL_DIR}...${NC}"

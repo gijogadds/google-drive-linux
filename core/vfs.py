@@ -366,10 +366,20 @@ Categories=Office;{category};
 
 
 def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False):
-    """Mount the Google Drive FUSE filesystem on Ubuntu."""
+    """Mount the Google Drive FUSE filesystem on Ubuntu (with automatic fallback for AppArmor /run/media restrictions)."""
     import subprocess
+    fallback_mount = os.path.expanduser("~/.cache/google-drive-linux/fuse_mnt")
     subprocess.run(["fusermount3", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
     subprocess.run(["fusermount", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
+    subprocess.run(["fusermount3", "-uz", fallback_mount], stderr=subprocess.DEVNULL, check=False)
+    subprocess.run(["fusermount", "-uz", fallback_mount], stderr=subprocess.DEVNULL, check=False)
+
+    if os.path.islink(mount_point):
+        try:
+            os.unlink(mount_point)
+        except OSError:
+            pass
+
     os.makedirs(mount_point, exist_ok=True)
     fs = GoogleDriveFUSE(db, cache_manager, api, account_id)
     print(f"[VFS] Montando Google Drive em: {mount_point}")
@@ -377,4 +387,15 @@ def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foregr
         if FUSE is not None:
             FUSE(fs, mount_point, nothreads=False, foreground=foreground, allow_other=False)
     except Exception as e:
-        print(f"[VFS] Erro ao montar FUSE: {e}")
+        print(f"[VFS] Montagem direta em '{mount_point}' bloqueada pelo AppArmor ({e}); ativando ponte FUSE transparente...")
+        try:
+            os.makedirs(fallback_mount, exist_ok=True)
+            if os.path.isdir(mount_point) and not os.path.islink(mount_point):
+                if not os.listdir(mount_point):
+                    os.rmdir(mount_point)
+            if not os.path.exists(mount_point) and not os.path.islink(mount_point):
+                os.symlink(fallback_mount, mount_point)
+            if FUSE is not None:
+                FUSE(fs, fallback_mount, nothreads=False, foreground=foreground, allow_other=False)
+        except Exception as e2:
+            print(f"[VFS] Erro ao montar FUSE no fallback: {e2}")

@@ -85,6 +85,8 @@ class GoogleDriveDaemon:
             unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
 
         try:
+            if os.path.islink(mount_pt):
+                os.unlink(mount_pt)
             os.makedirs(mount_pt, exist_ok=True)
         except Exception as e:
             msg = f"Não foi possível criar a pasta de montagem ({mount_pt}): {e}"

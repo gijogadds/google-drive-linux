@@ -47,11 +47,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 
 def unmount_fuse_path(path: str, remove_if_empty: bool = False):
-    """Safely unmount a FUSE mountpoint and optionally remove the directory if empty."""
+    """Safely unmount a FUSE mountpoint (including symlinked AppArmor fallback) and optionally remove it if empty."""
     if not path:
         return
+    fallback_mount = os.path.expanduser("~/.cache/google-drive-linux/fuse_mnt")
     subprocess.run(["fusermount3", "-uz", path], stderr=subprocess.DEVNULL, check=False)
     subprocess.run(["fusermount", "-uz", path], stderr=subprocess.DEVNULL, check=False)
+    if os.path.islink(path):
+        subprocess.run(["fusermount3", "-uz", fallback_mount], stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(["fusermount", "-uz", fallback_mount], stderr=subprocess.DEVNULL, check=False)
+        if remove_if_empty:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return
     if remove_if_empty and os.path.isdir(path) and not os.path.ismount(path):
         try:
             if not os.listdir(path):
@@ -84,13 +94,16 @@ def ensure_directories():
         unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
 
     for path in [CONFIG_DIR, active_cache, LOG_DIR, active_mount]:
+        if os.path.islink(path):
+            continue
         try:
             Path(path).mkdir(parents=True, exist_ok=True)
         except OSError:
             # Recover if path is a disconnected FUSE mount (ENOTCONN / FileExistsError)
             unmount_fuse_path(path, remove_if_empty=False)
             try:
-                Path(path).mkdir(parents=True, exist_ok=True)
+                if not os.path.islink(path):
+                    Path(path).mkdir(parents=True, exist_ok=True)
             except OSError:
                 pass
 

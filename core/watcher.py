@@ -215,13 +215,13 @@ class SyncWorker(threading.Thread):
             self.current_activity = self.sync_phase
             root_token = None
             while self.running and not self.paused:
-                resp = self.api.list_files(q="'root' in parents and trashed = false", page_size=200, page_token=root_token)
+                resp = self.api.list_files(q="'root' in parents and trashed = false", page_size=500, page_token=root_token)
                 files = resp.get("files", [])
                 self._ingest_files(files, now, force_parent_root=True)
                 root_token = resp.get("nextPageToken")
                 if not root_token:
                     break
-                time.sleep(0.2)
+                time.sleep(0.8)
 
             # 3. Map all folders across Drive on initial scan so subfolder navigation is complete
             if not self.initial_scan_complete:
@@ -229,10 +229,10 @@ class SyncWorker(threading.Thread):
                 self.current_activity = self.sync_phase
                 folder_token = None
                 folder_pages = 0
-                while self.running and not self.paused and folder_pages < 30:
+                while self.running and not self.paused and folder_pages < 20:
                     resp = self.api.list_files(
                         q="mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-                        page_size=200,
+                        page_size=1000,
                         page_token=folder_token
                     )
                     files = resp.get("files", [])
@@ -241,16 +241,16 @@ class SyncWorker(threading.Thread):
                     folder_token = resp.get("nextPageToken")
                     if not folder_token:
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.8)
 
             # 4. Background file tree sync continuing from resume_page_token
             page_token = self.resume_page_token
             pages_fetched = 0
-            while self.running and not self.paused and pages_fetched < 40:
+            while self.running and not self.paused and pages_fetched < 15:
                 stats = self.db.get_sync_stats()
                 self.sync_phase = f"Sincronizando catálogo ({stats['total_items']} itens indexados)..."
                 self.current_activity = self.sync_phase
-                resp = self.api.list_files(q="trashed = false", page_size=200, page_token=page_token)
+                resp = self.api.list_files(q="trashed = false", page_size=1000, page_token=page_token)
                 files = resp.get("files", [])
                 self._ingest_files(files, now, force_parent_root=False)
                 pages_fetched += 1
@@ -260,7 +260,7 @@ class SyncWorker(threading.Thread):
                     self.initial_scan_complete = True
                     self.resume_page_token = None
                     break
-                time.sleep(0.25)
+                time.sleep(1.0)
 
             self.last_sync_timestamp = int(time.time())
         finally:
