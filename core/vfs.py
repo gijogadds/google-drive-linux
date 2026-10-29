@@ -68,10 +68,10 @@ class GoogleDriveFUSE(Operations):
             if part.endswith(".desktop") and not part.startswith("."):
                 real_name = part[:-8]
 
-            item = self.db.get_item_by_path(current_parent, real_name)
+            item = self.db.get_item_by_path(current_parent, real_name, account_id=self.account_id)
             if not item:
                 # Fallback to direct name lookup
-                item = self.db.get_item_by_path(current_parent, part)
+                item = self.db.get_item_by_path(current_parent, part, account_id=self.account_id)
             if not item:
                 return None
             current_parent = item["id"]
@@ -130,7 +130,7 @@ class GoogleDriveFUSE(Operations):
             raise FuseOSError(errno.ENOENT)
 
         dirents = [".", ".."]
-        children = self.db.get_children(item["id"])
+        children = self.db.get_children(item["id"], account_id=self.account_id)
         # On-demand folder hydration if directory appears empty and hasn't been fetched yet
         if not children and item["id"] not in self._hydrated_dirs and hasattr(self.api, "list_files"):
             self._hydrated_dirs.add(item["id"])
@@ -159,7 +159,7 @@ class GoogleDriveFUSE(Operations):
                             "local_cache_path": None
                         })
                     self.db.upsert_items_batch(batch)
-                    children = self.db.get_children(item["id"])
+                    children = self.db.get_children(item["id"], account_id=self.account_id)
             except Exception:
                 pass
 
@@ -393,7 +393,7 @@ def _sync_gtk_bookmark(mount_point: str, enable_bookmark: bool):
 def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False):
     """Mount the Google Drive FUSE filesystem on Ubuntu (with automatic fallback for AppArmor /run/media)."""
     import subprocess
-    fallback_mount = os.path.expanduser("~/.cache/google-drive-linux/fuse_mnt")
+    fallback_mount = os.path.expanduser(f"~/.cache/google-drive-linux/fuse_mnt_{account_id}")
     subprocess.run(["fusermount3", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
     subprocess.run(["fusermount", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
     subprocess.run(["fusermount3", "-uz", fallback_mount], stderr=subprocess.DEVNULL, check=False)

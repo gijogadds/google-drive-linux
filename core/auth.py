@@ -91,7 +91,7 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
                         "Sucesso!",
                         drive_b64,
                         "Conta conectada ao Google Drive para Linux.",
-                        "Você já pode fechar esta guia e retornar ao aplicativo."
+                        "Fechando esta janela automaticamente..."
                     )
                 except Exception:
                     content = raw_tpl
@@ -101,10 +101,21 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
                 <head><title>Google Drive - Conectado</title></head>
                 <body style="font-family:sans-serif; text-align:center; padding-top:50px;">
                     <h2 style="color:#1a73e8;">Conectado com sucesso!</h2>
-                    <p>Você pode fechar esta aba e retornar ao aplicativo.</p>
+                    <p>Fechando esta janela automaticamente...</p>
                 </body>
                 </html>
                 """
+            auto_close_js = (
+                "<script>"
+                "setTimeout(function(){"
+                "try{window.open('','_self','');window.close();}catch(e){}"
+                "}, 600);"
+                "</script>"
+            )
+            if "</body>" in content:
+                content = content.replace("</body>", f"{auto_close_js}</body>")
+            else:
+                content += auto_close_js
             self.wfile.write(content.encode("utf-8"))
         elif "error" in params:
             OAuthCallbackHandler.error = params.get("error", ["unknown"])[0]
@@ -147,42 +158,98 @@ class AuthManager:
             pass
 
     def _open_oauth_browser(self, auth_url: str, isolated: bool = False):
-        """Open the OAuth URL in the user's browser, using an isolated/incognito window when adding a second account to prevent Google's authuser=1 HTTP 400 error."""
+        """Open the OAuth URL in a dedicated browser window that can be closed automatically upon completion."""
         import shutil
         import subprocess
+        import tempfile
 
+        self._oauth_browser_proc = None
+        self._oauth_temp_dir = None
+
+        chrome_flags = [
+            "--no-first-run",
+            "--no-default-browser-check",
+            f"--app={auth_url}",
+        ]
         if isolated:
-            # 1. Check native Chromium/Chrome/Brave/Edge binaries
-            for bin_name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge"):
-                path = shutil.which(bin_name)
-                if path:
-                    try:
-                        subprocess.Popen([path, "--incognito", auth_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        return
-                    except Exception:
-                        pass
+            self._oauth_temp_dir = tempfile.mkdtemp(prefix="gdrive-oauth-")
+            chrome_flags.insert(0, f"--user-data-dir={self._oauth_temp_dir}")
 
-            # 2. Check Flatpak Chrome/Chromium/Brave/Edge
-            if shutil.which("flatpak"):
-                for app_id in ("com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser", "com.microsoft.Edge"):
-                    try:
-                        chk = subprocess.run(["flatpak", "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        if chk.returncode == 0:
-                            subprocess.Popen(["flatpak", "run", app_id, "--incognito", auth_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            return
-                    except Exception:
-                        pass
-
-            # 3. Check Firefox
-            ff_path = shutil.which("firefox")
-            if ff_path:
+        # 1. Check native Chromium/Chrome/Brave/Edge binaries
+        for bin_name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge"):
+            path = shutil.which(bin_name)
+            if path:
                 try:
-                    subprocess.Popen([ff_path, "--private-window", auth_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self._oauth_browser_proc = subprocess.Popen(
+                        [path] + chrome_flags,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
                     return
                 except Exception:
                     pass
 
+        # 2. Check Flatpak Chrome/Chromium/Brave/Edge
+        if shutil.which("flatpak"):
+            for app_id in ("com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser", "com.microsoft.Edge"):
+                try:
+                    chk = subprocess.run(["flatpak", "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if chk.returncode == 0:
+                        flatpak_cmd = ["flatpak", "run"]
+                        if self._oauth_temp_dir:
+                            flatpak_cmd.append(f"--filesystem={self._oauth_temp_dir}")
+                        flatpak_cmd.append(app_id)
+                        flatpak_cmd.extend(chrome_flags)
+                        self._oauth_browser_proc = subprocess.Popen(
+                            flatpak_cmd,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        return
+                except Exception:
+                    pass
+
+        # 3. Check Firefox
+        ff_path = shutil.which("firefox")
+        if ff_path and isolated:
+            try:
+                self._oauth_browser_proc = subprocess.Popen(
+                    [ff_path, "--private-window", auth_url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                return
+            except Exception:
+                pass
+
         webbrowser.open(auth_url)
+
+    def _close_oauth_browser(self):
+        """Automatically close the dedicated OAuth browser process and clean up temporary profile."""
+        import shutil
+        proc = getattr(self, "_oauth_browser_proc", None)
+        tmp_dir = getattr(self, "_oauth_temp_dir", None)
+        self._oauth_browser_proc = None
+        self._oauth_temp_dir = None
+
+        def _cleanup():
+            time.sleep(0.9)
+            if proc is not None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            if tmp_dir and os.path.exists(tmp_dir):
+                try:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_cleanup, daemon=True).start()
 
     def login_interactive(self, login_hint: Optional[str] = None, isolated_session: Optional[bool] = None) -> Optional[Dict[str, Any]]:
         """Start local HTTP callback server and open browser for Google OAuth."""
@@ -229,6 +296,7 @@ class AuthManager:
         ):
             server.handle_request()
         server.server_close()
+        self._close_oauth_browser()
 
         code = OAuthCallbackHandler.auth_code
         if not code:

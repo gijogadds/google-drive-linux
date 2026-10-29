@@ -36,6 +36,7 @@ except Exception:
 
 from core.config import (
     load_config, save_config, ensure_directories, unmount_fuse_path,
+    ensure_apparmor_allows_mount, get_account_mount_point,
     DEFAULT_MOUNT_POINT, IPC_SOCKET_PATH
 )
 from core.db import MetadataDB
@@ -78,6 +79,7 @@ class GoogleDriveDaemon:
         self.cache = None
         self.account_id = None
         self.active_mount_point = None
+        self.account_runtimes = {}
         self.updater = None
         self.github_updater = None
         self.fuse_thread = None
@@ -89,13 +91,19 @@ class GoogleDriveDaemon:
         self.open_settings_on_start = open_settings_on_start
         self.running = True
 
-    def _mount_vfs_at(self, mount_pt: str) -> tuple:
-        """Create mount directory and start FUSE thread at mount_pt."""
-        if self.active_mount_point and self.active_mount_point != mount_pt:
-            unmount_fuse_path(self.active_mount_point, remove_if_empty=True)
+    def _mount_vfs_for_account(self, account_id: str, mount_pt: str, api, cache) -> tuple:
+        """Create mount directory and start FUSE thread at mount_pt for a specific account."""
+        rt = self.account_runtimes.get(account_id, {})
+        old_mount = rt.get("mount_point")
+        if old_mount and old_mount != mount_pt:
+            unmount_fuse_path(old_mount, remove_if_empty=True)
         if mount_pt != DEFAULT_MOUNT_POINT and os.path.exists(DEFAULT_MOUNT_POINT):
-            unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
+            # Only clean default mount point if no account uses it
+            used_mounts = set((self.config.get("account_mounts") or {}).values())
+            if DEFAULT_MOUNT_POINT not in used_mounts:
+                unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
 
+        ensure_apparmor_allows_mount(mount_pt)
         try:
             if os.path.islink(mount_pt):
                 os.unlink(mount_pt)
@@ -105,48 +113,91 @@ class GoogleDriveDaemon:
             print(f"[Aviso] {msg}")
             return False, msg
 
-        self.active_mount_point = mount_pt
-        if self.api and self.cache and self.account_id:
-            self.fuse_thread = threading.Thread(
-                target=mount_fuse,
-                args=(mount_pt, self.db, self.cache, self.api, self.account_id),
-                kwargs={"foreground": True},
-                daemon=True,
-                name="FUSEThread"
-            )
-            self.fuse_thread.start()
+        fuse_thread = threading.Thread(
+            target=mount_fuse,
+            args=(mount_pt, self.db, cache, api, account_id),
+            kwargs={"foreground": True},
+            daemon=True,
+            name=f"FUSEThread-{account_id[:6]}"
+        )
+        fuse_thread.start()
+        if account_id in self.account_runtimes:
+            self.account_runtimes[account_id]["mount_point"] = mount_pt
+            self.account_runtimes[account_id]["fuse_thread"] = fuse_thread
+        if account_id == self.account_id:
+            self.active_mount_point = mount_pt
+            self.fuse_thread = fuse_thread
         return True, f"As alterações foram aplicadas com sucesso!\n\nPasta do Google Drive ativa em:\n{mount_pt}"
 
+    def _mount_vfs_at(self, mount_pt: str) -> tuple:
+        """Mount VFS for the currently active account."""
+        if not self.account_id or not self.api or not self.cache:
+            return False, "Nenhuma conta ativa para montar."
+        if "account_mounts" not in self.config or not isinstance(self.config["account_mounts"], dict):
+            self.config["account_mounts"] = {}
+        self.config["account_mounts"][self.account_id] = mount_pt
+        save_config(self.config)
+        return self._mount_vfs_for_account(self.account_id, mount_pt, self.api, self.cache)
+
     def ensure_sync_started(self):
-        """Start SyncWorker and FUSE mount if an account is connected and not yet running."""
-        if self.sync_worker is not None:
-            return
+        """Start SyncWorker and FUSE mount for all connected accounts simultaneously, and focus the active account."""
         accounts = self.db.get_accounts()
         if not accounts:
             return
-        account_id = accounts[0]["account_id"]
-        self.account_id = account_id
         self.auth.accounts = self.auth._load_accounts_from_disk()
+        if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
+            self.config["account_mounts"] = {}
 
-        self.api = DriveAPI(self.auth, account_id)
-        self.cache = CacheManager(
-            db=self.db,
-            api=self.api,
-            chunk_size_mb=self.config.get("chunk_size_mb", 16),
-            max_cache_size_gb=self.config.get("max_cache_size_gb", 10),
-            cache_dir=self.config.get("cache_dir")
-        )
+        # Primary account is the first account registered in accounts.json (or first in DB)
+        primary_id = list(self.auth.accounts.keys())[0] if self.auth.accounts else accounts[0]["account_id"]
+        if primary_id not in self.config["account_mounts"]:
+            self.config["account_mounts"][primary_id] = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
+            save_config(self.config)
 
-        self.sync_worker = SyncWorker(db=self.db, api=self.api, account_id=account_id)
-        self.sync_worker.start()
+        for idx, acc in enumerate(accounts):
+            acc_id = acc["account_id"]
+            email = acc.get("email", "")
+            is_primary = (acc_id == primary_id)
+            mount_pt = get_account_mount_point(self.config, acc_id, email=email, is_primary=is_primary)
+
+            if acc_id not in self.account_runtimes:
+                api = DriveAPI(self.auth, acc_id)
+                base_cache = self.config.get("cache_dir") or os.path.expanduser("~/.cache/google-drive-linux")
+                acc_cache_dir = base_cache if is_primary else os.path.join(base_cache, f"acc_{acc_id}")
+                cache = CacheManager(
+                    db=self.db,
+                    api=api,
+                    chunk_size_mb=self.config.get("chunk_size_mb", 16),
+                    max_cache_size_gb=self.config.get("max_cache_size_gb", 10),
+                    cache_dir=acc_cache_dir
+                )
+                worker = SyncWorker(db=self.db, api=api, account_id=acc_id)
+                worker.start()
+                self.account_runtimes[acc_id] = {
+                    "api": api,
+                    "cache": cache,
+                    "sync_worker": worker,
+                    "fuse_thread": None,
+                    "mount_point": mount_pt,
+                    "email": email,
+                }
+                self._mount_vfs_for_account(acc_id, mount_pt, api, cache)
+
+        # Active account is accounts[0] (ordered by last_sync DESC)
+        active_acc = accounts[0]
+        active_id = active_acc["account_id"]
+        rt = self.account_runtimes[active_id]
+        self.account_id = active_id
+        self.api = rt["api"]
+        self.cache = rt["cache"]
+        self.sync_worker = rt["sync_worker"]
+        self.fuse_thread = rt["fuse_thread"]
+        self.active_mount_point = rt["mount_point"]
 
         if self.indicator:
             self.indicator.sync_worker = self.sync_worker
         if self.home_window:
             self.home_window.sync_worker = self.sync_worker
-
-        mount_pt = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
-        self._mount_vfs_at(mount_pt)
 
     def _start_ipc_server(self):
         """Listen on UNIX socket so desktop icon launches open the window in the running instance."""
@@ -215,7 +266,18 @@ class GoogleDriveDaemon:
         self.home_window.show()
         return False
 
-    def _on_account_connected(self, _acc):
+    def _on_account_connected(self, acc):
+        if isinstance(acc, dict) and acc.get("mount_point") and acc.get("account_id"):
+            if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
+                self.config["account_mounts"] = {}
+            acc_id = acc["account_id"]
+            new_mount = acc["mount_point"]
+            self.config["account_mounts"][acc_id] = new_mount
+            save_config(self.config)
+            if acc_id in self.account_runtimes:
+                rt = self.account_runtimes[acc_id]
+                if rt.get("mount_point") != new_mount or not os.path.exists(new_mount):
+                    self._mount_vfs_for_account(acc_id, new_mount, rt["api"], rt["cache"])
         self.ensure_sync_started()
         if self.indicator:
             self.indicator.update_menu()
@@ -279,7 +341,8 @@ class GoogleDriveDaemon:
             self._handle_shutdown(None, None)
 
     def _periodic_account_check(self):
-        if self.sync_worker is None and self.db.get_accounts():
+        accounts = self.db.get_accounts()
+        if accounts and len(self.account_runtimes) < len(accounts):
             self.ensure_sync_started()
         return True
 
@@ -290,6 +353,10 @@ class GoogleDriveDaemon:
         old_mount = self.active_mount_point or self.config.get("mount_point", DEFAULT_MOUNT_POINT)
         new_mount = new_config.get("mount_point", DEFAULT_MOUNT_POINT)
         self.config = dict(new_config)
+        if self.account_id:
+            if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
+                self.config["account_mounts"] = {}
+            self.config["account_mounts"][self.account_id] = new_mount
         save_config(self.config)
 
         if self.home_window:
@@ -311,13 +378,15 @@ class GoogleDriveDaemon:
     def _handle_shutdown(self, signum, frame):
         print("\n[Encerrando] Desmontando sistema de arquivos e finalizando threads...")
         self.running = False
+        for acc_id, rt in list(self.account_runtimes.items()):
+            mnt = rt.get("mount_point")
+            if mnt:
+                unmount_fuse_path(mnt, remove_if_empty=False)
+            worker = rt.get("sync_worker")
+            if worker:
+                worker.stop()
         mount_pt = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
-        try:
-            import subprocess
-            subprocess.run(["fusermount3", "-uz", mount_pt], stderr=subprocess.DEVNULL, check=False)
-            subprocess.run(["fusermount", "-uz", mount_pt], stderr=subprocess.DEVNULL, check=False)
-        except Exception:
-            pass
+        unmount_fuse_path(mount_pt, remove_if_empty=False)
         if os.path.exists(IPC_SOCKET_PATH):
             try:
                 os.unlink(IPC_SOCKET_PATH)

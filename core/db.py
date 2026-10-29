@@ -169,37 +169,63 @@ class MetadataDB:
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def get_item_by_path(self, parent_id: str, name: str) -> Optional[Dict[str, Any]]:
+    def get_item_by_path(self, parent_id: str, name: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM items WHERE parent_id = ? AND name = ? AND is_trashed = 0", (parent_id, name))
+            if account_id:
+                cursor.execute(
+                    "SELECT * FROM items WHERE parent_id = ? AND name = ? AND account_id = ? AND is_trashed = 0",
+                    (parent_id, name, account_id)
+                )
+            else:
+                cursor.execute("SELECT * FROM items WHERE parent_id = ? AND name = ? AND is_trashed = 0", (parent_id, name))
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def get_children(self, parent_id: str) -> List[Dict[str, Any]]:
+    def get_children(self, parent_id: str, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM items WHERE parent_id = ? AND is_trashed = 0 ORDER BY is_directory DESC, name ASC", (parent_id,))
+            if account_id:
+                cursor.execute(
+                    "SELECT * FROM items WHERE parent_id = ? AND account_id = ? AND is_trashed = 0 ORDER BY is_directory DESC, name ASC",
+                    (parent_id, account_id)
+                )
+            else:
+                cursor.execute("SELECT * FROM items WHERE parent_id = ? AND is_trashed = 0 ORDER BY is_directory DESC, name ASC", (parent_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_sync_stats(self) -> Dict[str, int]:
+    def get_sync_stats(self, account_id: Optional[str] = None) -> Dict[str, int]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT
-                    COUNT(*),
-                    COALESCE(SUM(CASE WHEN is_directory = 0 THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN is_directory = 1 THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(size), 0)
-                FROM items
-                WHERE is_trashed = 0
-            """)
+            if account_id:
+                cursor.execute("""
+                    SELECT
+                        COUNT(*),
+                        COALESCE(SUM(CASE WHEN is_directory = 0 THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN is_directory = 1 THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(size), 0)
+                    FROM items
+                    WHERE is_trashed = 0 AND account_id = ?
+                """, (account_id,))
+            else:
+                cursor.execute("""
+                    SELECT
+                        COUNT(*),
+                        COALESCE(SUM(CASE WHEN is_directory = 0 THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN is_directory = 1 THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(size), 0)
+                    FROM items
+                    WHERE is_trashed = 0
+                """)
             row = cursor.fetchone()
             total_items = row[0] if row else 0
             total_files = row[1] if row else 0
             total_dirs = row[2] if row else 0
             indexed_bytes = row[3] if row else 0
-            cursor.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending', 'running')")
+            if account_id:
+                cursor.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending', 'running') AND account_id = ?", (account_id,))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending', 'running')")
             op_row = cursor.fetchone()
             pending_ops = op_row[0] if op_row else 0
             return {
@@ -210,16 +236,25 @@ class MetadataDB:
                 "pending_ops": pending_ops,
             }
 
-    def get_recent_items(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_recent_items(self, limit: int = 50, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name, mime_type, is_directory, size, sync_status, modified_time
-                FROM items
-                WHERE is_trashed = 0
-                ORDER BY modified_time DESC, is_directory DESC, name ASC
-                LIMIT ?
-            """, (limit,))
+            if account_id:
+                cursor.execute("""
+                    SELECT id, name, mime_type, is_directory, size, sync_status, modified_time
+                    FROM items
+                    WHERE is_trashed = 0 AND account_id = ?
+                    ORDER BY modified_time DESC, is_directory DESC, name ASC
+                    LIMIT ?
+                """, (account_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT id, name, mime_type, is_directory, size, sync_status, modified_time
+                    FROM items
+                    WHERE is_trashed = 0
+                    ORDER BY modified_time DESC, is_directory DESC, name ASC
+                    LIMIT ?
+                """, (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
     def update_sync_status(self, item_id: str, status: str, local_cache_path: Optional[str] = None):
@@ -249,10 +284,13 @@ class MetadataDB:
             conn.commit()
             return cursor.lastrowid
 
-    def get_pending_operations(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_pending_operations(self, limit: int = 20, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM operations WHERE status = 'pending' ORDER BY id ASC LIMIT ?", (limit,))
+            if account_id:
+                cursor.execute("SELECT * FROM operations WHERE status = 'pending' AND account_id = ? ORDER BY id ASC LIMIT ?", (account_id, limit))
+            else:
+                cursor.execute("SELECT * FROM operations WHERE status = 'pending' ORDER BY id ASC LIMIT ?", (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
     def update_operation_status(self, op_id: int, status: str, bytes_transferred: int = 0, error_message: Optional[str] = None):
@@ -270,8 +308,16 @@ class MetadataDB:
     def get_accounts(self) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM accounts WHERE is_active = 1 ORDER BY last_sync DESC")
-            return [dict(row) for row in cursor.fetchall()]
+            cursor.execute("SELECT * FROM accounts WHERE is_active = 1 ORDER BY rowid ASC")
+            rows = [dict(row) for row in cursor.fetchall()]
+        try:
+            from core.config import _read_raw_config
+            active_id = _read_raw_config().get("active_account_id")
+            if active_id and len(rows) > 1:
+                rows.sort(key=lambda r: 0 if r.get("account_id") == active_id else 1)
+        except Exception:
+            pass
+        return rows
 
     def upsert_account(self, account_data: Dict[str, Any]):
         with self._get_connection() as conn:

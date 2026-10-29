@@ -91,6 +91,7 @@ class GoogleDriveHomeWindow:
         self._refresh_live_ui()
         GLib.timeout_add(1500, self._refresh_live_ui)
         window.present()
+        GLib.idle_add(self._check_unconfigured_account_mounts)
 
     def _on_window_destroy(self, _widget):
         self.window = None
@@ -411,12 +412,22 @@ class GoogleDriveHomeWindow:
         link_manage.set_alignment(0, 0.5)
         storage_box.pack_start(link_manage, False, False, 0)
 
+        if acc.get("account_id"):
+            from core.config import get_account_mount_point
+            acc_mount = get_account_mount_point(self.config, acc.get("account_id", ""), email=acc.get("email", ""))
+            lbl_mnt = Gtk.Label()
+            lbl_mnt.set_markup(f"<small>📁 Pasta montada: <b>{GLib.markup_escape_text(os.path.basename(acc_mount) or acc_mount)}</b></small>")
+            lbl_mnt.set_tooltip_text(acc_mount)
+            lbl_mnt.set_alignment(0, 0.5)
+            storage_box.pack_start(lbl_mnt, False, False, 0)
+
         storage_frame.add(storage_box)
         vbox.pack_start(storage_frame, False, False, 5)
 
         # List additional connected accounts if more than 1 account exists
         if len(accounts) > 1:
-            others_frame = Gtk.Frame(label="Outras contas conectadas")
+            from core.config import get_account_mount_point
+            others_frame = Gtk.Frame(label="Outras contas conectadas (Sincronizando em paralelo)")
             others_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             others_box.set_margin_top(8)
             others_box.set_margin_bottom(8)
@@ -425,12 +436,19 @@ class GoogleDriveHomeWindow:
             for other_acc in accounts[1:]:
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 row.pack_start(self._create_avatar_widget(other_acc, size=28), False, False, 0)
-                lbl_o = Gtk.Label(label=other_acc.get("email", ""))
+                other_id = other_acc.get("account_id", "")
+                other_email = other_acc.get("email", "")
+                other_mount = get_account_mount_point(self.config, other_id, email=other_email)
+                lbl_o = Gtk.Label()
+                lbl_o.set_markup(
+                    f"<b>{GLib.markup_escape_text(other_email)}</b>\n"
+                    f"<small>📁 {GLib.markup_escape_text(os.path.basename(other_mount) or other_mount)}</small>"
+                )
+                lbl_o.set_tooltip_text(other_mount)
                 lbl_o.set_alignment(0, 0.5)
                 lbl_o.set_ellipsize(3)
                 row.pack_start(lbl_o, True, True, 0)
                 btn_sw = Gtk.Button(label="Usar")
-                other_id = other_acc.get("account_id")
                 btn_sw.connect("clicked", lambda _, aid=other_id: (popover.popdown(), self._on_switch_account(aid)))
                 row.pack_start(btn_sw, False, False, 0)
                 others_box.pack_start(row, False, False, 0)
@@ -680,7 +698,13 @@ class GoogleDriveHomeWindow:
             return False
 
         try:
-            stats = self.db.get_sync_stats()
+            from core.config import get_account_mount_point
+            accs = self.db.get_accounts()
+            active_acc = accs[0] if accs else {}
+            active_acc_id = active_acc.get("account_id")
+            active_email = active_acc.get("email", "")
+
+            stats = self.db.get_sync_stats(account_id=active_acc_id)
             total_items = stats["total_items"]
             total_files = stats["total_files"]
             total_dirs = stats["total_dirs"]
@@ -691,10 +715,8 @@ class GoogleDriveHomeWindow:
             is_paused = bool(self.sync_worker and getattr(self.sync_worker, "paused", False))
             scan_complete = bool(self.sync_worker and getattr(self.sync_worker, "initial_scan_complete", False))
             drive_total_bytes = getattr(self.sync_worker, "drive_total_bytes", 0) if self.sync_worker else 0
-            if not drive_total_bytes:
-                accs = self.db.get_accounts()
-                if accs:
-                    drive_total_bytes = int(accs[0].get("storage_used", 0))
+            if not drive_total_bytes and active_acc:
+                drive_total_bytes = int(active_acc.get("storage_used", 0))
 
             if scan_complete and not is_syncing and pending_ops == 0:
                 pct = 100.0
@@ -711,7 +733,7 @@ class GoogleDriveHomeWindow:
 
             phase = getattr(self.sync_worker, "sync_phase", "Sincronizando...") if self.sync_worker else "Aguardando..."
             last_file = getattr(self.sync_worker, "last_synced_file", "") if self.sync_worker else ""
-            mount_pt = self.config.get("mount_point", os.path.expanduser("~/GoogleDrive"))
+            mount_pt = get_account_mount_point(self.config, active_acc_id or "", email=active_email)
             sync_mode_label = "Espelhar (Offline)" if self.config.get("sync_mode") == "mirror" else "Stream (Sob demanda)"
 
             # 1. Update Home Card 1 ("Status de sincronização")
@@ -768,7 +790,7 @@ class GoogleDriveHomeWindow:
                 if self.sync_worker and getattr(self.sync_worker, "recent_synced_items", None):
                     recent = list(self.sync_worker.recent_synced_items[:35])
                 if not recent:
-                    recent = self.db.get_recent_items(limit=35)
+                    recent = self.db.get_recent_items(limit=35, account_id=active_acc_id)
 
                 for child in self.act_list_box.get_children():
                     self.act_list_box.remove(child)
@@ -901,7 +923,14 @@ class GoogleDriveHomeWindow:
 
     # --- Actions ---
     def _on_open_folder(self):
-        mount_pt = self.config.get("mount_point", os.path.expanduser("~/GoogleDrive"))
+        from core.config import get_account_mount_point
+        accs = self.db.get_accounts()
+        active_acc = accs[0] if accs else {}
+        mount_pt = get_account_mount_point(
+            self.config,
+            active_acc.get("account_id", ""),
+            email=active_acc.get("email", "")
+        )
         subprocess.Popen(["xdg-open", mount_pt])
 
     def _on_toggle_pause(self, btn):
@@ -1022,17 +1051,126 @@ class GoogleDriveHomeWindow:
         dialog.run()
         dialog.destroy()
 
+    def _check_unconfigured_account_mounts(self):
+        """If a secondary connected account has not had its mount folder chosen by the user yet, prompt automatically."""
+        if getattr(self, "_checking_mounts", False):
+            return False
+        self._checking_mounts = True
+        try:
+            from core.config import save_config
+            accs = self.db.get_accounts()
+            if len(accs) > 1:
+                primary_id = list(self.auth.accounts.keys())[0] if (self.auth and self.auth.accounts) else accs[0]["account_id"]
+                confirmed = list(self.config.get("confirmed_account_mounts") or [])
+                if primary_id not in confirmed:
+                    confirmed.append(primary_id)
+                    self.config["confirmed_account_mounts"] = confirmed
+                    save_config(self.config)
+                for acc in accs:
+                    aid = acc["account_id"]
+                    if aid not in confirmed:
+                        chosen_mount = self._prompt_account_mount_point(acc)
+                        confirmed.append(aid)
+                        self.config["confirmed_account_mounts"] = confirmed
+                        if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
+                            self.config["account_mounts"] = {}
+                        self.config["account_mounts"][aid] = chosen_mount
+                        self.config["active_account_id"] = aid
+                        save_config(self.config)
+                        acc_with_mount = dict(acc)
+                        acc_with_mount["mount_point"] = chosen_mount
+                        if self.on_account_connected:
+                            self.on_account_connected(acc_with_mount)
+                        if self.window:
+                            self.window.destroy()
+                        self.show()
+                        break
+        except Exception as e:
+            print(f"[UI] Aviso ao verificar pastas de contas: {e}")
+        finally:
+            self._checking_mounts = False
+        return False
+
+    def _prompt_account_mount_point(self, acc: Dict[str, Any]) -> str:
+        """Open a graphical dialog right after login so the user can confirm or choose the mount folder for the account."""
+        from core.config import suggest_account_mount_point
+        email = acc.get("email", "")
+        prefix = email.split("@")[0] if email else "Conta"
+        folder_basename = f"GoogleDrive - {prefix}"
+        suggested = suggest_account_mount_point(self.config, email=email, is_primary=False)
+
+        dlg = Gtk.Dialog(
+            title=f"Pasta do Google Drive — {email}",
+            transient_for=self.window,
+            flags=0
+        )
+        dlg.add_buttons(
+            "Confirmar e Criar Pasta na Lateral", Gtk.ResponseType.OK
+        )
+        dlg.set_default_size(540, 230)
+        area = dlg.get_content_area()
+        area.set_spacing(12)
+        area.set_margin_top(18)
+        area.set_margin_bottom(18)
+        area.set_margin_start(20)
+        area.set_margin_end(20)
+
+        lbl_head = Gtk.Label()
+        lbl_head.set_markup(
+            f"<big><b>Conta conectada: {GLib.markup_escape_text(email)}</b></big>\n"
+            "Escolha em qual local deseja adicionar e montar a pasta desta conta.\n"
+            "<small>Ela ficará visível na barra lateral do Gerenciador de Arquivos (Nautilus) simultaneamente com suas outras contas.</small>"
+        )
+        lbl_head.set_line_wrap(True)
+        lbl_head.set_alignment(0, 0)
+        area.pack_start(lbl_head, False, False, 0)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        entry = Gtk.Entry()
+        entry.set_text(suggested)
+        entry.set_hexpand(True)
+        row.pack_start(entry, True, True, 0)
+
+        def _browse(_btn):
+            chooser = Gtk.FileChooserDialog(
+                title=f"Selecionar local para a pasta de {email}",
+                transient_for=dlg,
+                action=Gtk.FileChooserAction.SELECT_FOLDER
+            )
+            chooser.add_buttons(
+                "Cancelar", Gtk.ResponseType.CANCEL,
+                "Selecionar Aqui", Gtk.ResponseType.OK
+            )
+            if chooser.run() == Gtk.ResponseType.OK:
+                folder = chooser.get_filename()
+                if folder:
+                    base = os.path.basename(folder.rstrip("/")).lower()
+                    if not base.startswith("googledrive"):
+                        folder = os.path.join(folder, folder_basename)
+                    entry.set_text(folder)
+            chooser.destroy()
+
+        btn_browse = Gtk.Button(label="Escolher outra pasta...")
+        btn_browse.connect("clicked", _browse)
+        row.pack_start(btn_browse, False, False, 0)
+        area.pack_start(row, False, False, 0)
+
+        dlg.show_all()
+        dlg.run()
+        chosen = entry.get_text().strip() or suggested
+        dlg.destroy()
+        return chosen
+
     def _on_switch_account(self, account_id: str):
         if not account_id:
             return
         try:
+            from core.config import save_config
             accs = self.db.get_accounts()
             chosen = next((a for a in accs if a.get("account_id") == account_id), None)
             if chosen:
-                # Re-insert with newest last_sync or reorder by updating rowid/last_sync
-                with self.db._get_connection() as conn:
-                    conn.execute("UPDATE accounts SET last_sync = last_sync + 1 WHERE account_id = ?", (account_id,))
-                    conn.commit()
+                self.config["active_account_id"] = account_id
+                save_config(self.config)
                 if self.on_account_connected:
                     self.on_account_connected(chosen)
                 if self.window:
@@ -1123,19 +1261,21 @@ class GoogleDriveHomeWindow:
                     pass
 
                 if acc:
+                    from core.config import save_config
+                    aid = acc.get("account_id", "")
+                    chosen_mount = self._prompt_account_mount_point(acc)
+                    if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
+                        self.config["account_mounts"] = {}
+                    self.config["account_mounts"][aid] = chosen_mount
+                    self.config["active_account_id"] = aid
+                    confirmed = list(self.config.get("confirmed_account_mounts") or [])
+                    if aid and aid not in confirmed:
+                        confirmed.append(aid)
+                    self.config["confirmed_account_mounts"] = confirmed
+                    save_config(self.config)
+                    acc["mount_point"] = chosen_mount
                     if self.on_account_connected:
                         self.on_account_connected(acc)
-                    ok_dlg = Gtk.MessageDialog(
-                        transient_for=self.window,
-                        message_type=Gtk.MessageType.INFO,
-                        buttons=Gtk.ButtonsType.OK,
-                        text="Conta Google Conectada com Sucesso!"
-                    )
-                    ok_dlg.format_secondary_text(
-                        f"A conta {acc.get('display_name') or ''} ({acc.get('email')}) foi autenticada e adicionada ao Google Drive."
-                    )
-                    ok_dlg.run()
-                    ok_dlg.destroy()
                     if self.window:
                         self.window.destroy()
                     self.show()
@@ -1163,13 +1303,26 @@ class GoogleDriveHomeWindow:
             text="Desconectar conta do Google Drive?"
         )
         if dialog.run() == Gtk.ResponseType.YES:
+            from core.config import get_account_mount_point, unmount_fuse_path, save_config
+            mnt = get_account_mount_point(self.config, account_id)
+            if mnt:
+                unmount_fuse_path(mnt, remove_if_empty=True)
+            if isinstance(self.config.get("account_mounts"), dict) and account_id in self.config["account_mounts"]:
+                del self.config["account_mounts"][account_id]
+            if isinstance(self.config.get("confirmed_account_mounts"), list) and account_id in self.config["confirmed_account_mounts"]:
+                self.config["confirmed_account_mounts"].remove(account_id)
+            save_config(self.config)
             # Remove from DB
             with self.db._get_connection() as conn:
+                conn.execute("DELETE FROM items WHERE account_id = ?", (account_id,))
+                conn.execute("DELETE FROM operations WHERE account_id = ?", (account_id,))
                 conn.execute("DELETE FROM accounts WHERE account_id = ?", (account_id,))
                 conn.commit()
             if self.auth and account_id in self.auth.accounts:
                 del self.auth.accounts[account_id]
                 self.auth._save_accounts_to_disk()
+            if self.on_account_connected:
+                self.on_account_connected(None)
             if self.window:
                 self.window.destroy()
             self.show()

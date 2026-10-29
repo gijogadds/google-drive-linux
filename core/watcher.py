@@ -63,7 +63,7 @@ class SyncWorker(threading.Thread):
         self.running = False
 
     def _process_pending_operations(self):
-        ops = self.db.get_pending_operations(limit=10)
+        ops = self.db.get_pending_operations(limit=10, account_id=self.account_id)
         if not ops:
             if not self.paused and self.current_activity != "Ocioso - Tudo atualizado":
                 self.current_activity = "Ocioso - Tudo atualizado"
@@ -262,7 +262,7 @@ class SyncWorker(threading.Thread):
             page_token = self.resume_page_token
             pages_fetched = 0
             while self.running and not self.paused and pages_fetched < 15:
-                stats = self.db.get_sync_stats()
+                stats = self.db.get_sync_stats(account_id=self.account_id)
                 self.sync_phase = f"Sincronizando catálogo ({stats['total_items']} itens indexados)..."
                 self.current_activity = self.sync_phase
                 resp = self.api.list_files(q="trashed = false", page_size=1000, page_token=page_token)
@@ -285,6 +285,6 @@ class SyncWorker(threading.Thread):
                 self.current_activity = "Ocioso - Tudo atualizado"
             else:
                 self.is_syncing = True
-                stats = self.db.get_sync_stats()
+                stats = self.db.get_sync_stats(account_id=self.account_id)
                 self.sync_phase = f"Sincronizando em segundo plano ({stats['total_items']} itens)..."
                 self.current_activity = self.sync_phase

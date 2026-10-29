@@ -184,6 +184,24 @@ def save_config(config: Dict[str, Any]):
         json.dump(config, f, indent=2)
 
 
+def suggest_account_mount_point(config: Dict[str, Any], email: str = "", is_primary: bool = False) -> str:
+    """Return a suggested mount point for an account (e.g., '<parent>/GoogleDrive - <prefix>' for secondary accounts)."""
+    primary_mount = config.get("mount_point", DEFAULT_MOUNT_POINT).rstrip("/")
+    if is_primary or not email:
+        return primary_mount
+    prefix = email.split("@")[0].strip()
+    parent_dir = os.path.dirname(primary_mount) or os.path.expanduser("~")
+    return os.path.join(parent_dir, f"GoogleDrive - {prefix}")
+
+
+def get_account_mount_point(config: Dict[str, Any], account_id: str, email: str = "", is_primary: bool = False) -> str:
+    """Return the configured mount point for a specific account_id, or suggest a default."""
+    mounts = config.get("account_mounts") or {}
+    if account_id and account_id in mounts and mounts[account_id]:
+        return mounts[account_id]
+    return suggest_account_mount_point(config, email=email, is_primary=is_primary)
+
+
 def get_mount_point() -> str:
     """Return active mount point (supporting external HDs and custom paths)."""
     cfg = load_config()
