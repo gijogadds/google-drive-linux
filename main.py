@@ -33,7 +33,15 @@ from core.diagnostic import install_global_crash_hook
 try:
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import GLib
+    from gi.repository import GLib, Gtk
+    GLib.set_prgname("google-drive")
+    GLib.set_application_name("Google Drive")
+    _icon_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icons", "drive_fs.png")
+    if os.path.exists(_icon_file):
+        try:
+            Gtk.Window.set_default_icon_from_file(_icon_file)
+        except Exception:
+            pass
     HAS_GLIB = True
 except Exception:
     HAS_GLIB = False

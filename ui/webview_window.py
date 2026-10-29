@@ -54,9 +54,16 @@ class GoogleDriveHomeWindow:
             self.window.present()
             return
 
+        GLib.set_prgname("google-drive")
+        GLib.set_application_name("Google Drive")
+
         window = Gtk.Window(title="Google Drive")
         window.set_default_size(980, 680)
         window.set_position(Gtk.WindowPosition.CENTER)
+        try:
+            window.set_wmclass("google-drive", "Google Drive")
+        except Exception:
+            pass
         window.connect("destroy", self._on_window_destroy)
 
         # Set official launcher icon (256x256 PNG)
@@ -66,6 +73,7 @@ class GoogleDriveHomeWindow:
         )
         if os.path.exists(icon_path):
             try:
+                Gtk.Window.set_default_icon_from_file(icon_path)
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file(icon_path)
                 window.set_icon(pixbuf)
             except Exception:
@@ -953,9 +961,16 @@ class SettingsDialog:
             self.window.present()
             return
 
+        GLib.set_prgname("google-drive")
+        GLib.set_application_name("Google Drive")
+
         window = Gtk.Window(title="Google Drive - Preferências")
         window.set_default_size(580, 520)
         window.set_position(Gtk.WindowPosition.CENTER)
+        try:
+            window.set_wmclass("google-drive", "Google Drive")
+        except Exception:
+            pass
         window.connect("destroy", lambda _: setattr(self, "window", None))
 
         icon_path = os.path.join(
@@ -964,6 +979,7 @@ class SettingsDialog:
         )
         if os.path.exists(icon_path):
             try:
+                Gtk.Window.set_default_icon_from_file(icon_path)
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file(icon_path)
                 window.set_icon(pixbuf)
             except Exception:

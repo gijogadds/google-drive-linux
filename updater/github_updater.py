@@ -175,11 +175,13 @@ class GitHubUpdater(threading.Thread):
     def notify_user_and_restart(self, update_info: Dict[str, Any]):
         """Notify Ubuntu desktop and safely trigger systemd user restart."""
         msg = f"A correção para os problemas reportados foi aplicada automaticamente (Versão: {update_info['new_version']})."
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons", "drive_fs.png")
         try:
             subprocess.Popen([
                 "notify-send",
                 "-a", "Google Drive",
-                "-i", "software-update-available",
+                "-i", icon_path if os.path.exists(icon_path) else "google-drive",
+                "-h", "string:desktop-entry:google-drive",
                 "Google Drive Atualizado!",
                 msg
             ])

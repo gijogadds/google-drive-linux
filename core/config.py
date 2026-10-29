@@ -141,6 +141,23 @@ def ensure_directories():
             except OSError:
                 pass
 
+    # Ensure user-level .desktop and icon exist so GNOME Shell (Wayland/X11) Dock & Lock Screen always show the Drive icon
+    try:
+        import shutil
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        desktop_src = os.path.join(project_root, "packaging", "desktop", "google-drive.desktop")
+        icon_src = os.path.join(project_root, "assets", "icons", "drive_fs.png")
+        user_apps_dir = os.path.expanduser("~/.local/share/applications")
+        user_icons_dir = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps")
+        if os.path.exists(desktop_src):
+            os.makedirs(user_apps_dir, exist_ok=True)
+            shutil.copy2(desktop_src, os.path.join(user_apps_dir, "google-drive.desktop"))
+        if os.path.exists(icon_src):
+            os.makedirs(user_icons_dir, exist_ok=True)
+            shutil.copy2(icon_src, os.path.join(user_icons_dir, "google-drive.png"))
+    except Exception:
+        pass
+
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from disk or create default."""

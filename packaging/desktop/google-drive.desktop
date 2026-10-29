@@ -8,11 +8,12 @@ Terminal=false
 Type=Application
 Categories=Network;FileTransfer;Office;
 StartupNotify=true
+StartupWMClass=google-drive
 Actions=OpenFolder;Settings;
 
 [Desktop Action OpenFolder]
 Name=Abrir Pasta do Drive
-Exec=sh -c 'xdg-open "$HOME/GoogleDrive"'
+Exec=/usr/bin/python3 -c "import os, sys, subprocess; sys.path.insert(0, '/opt/google-drive-linux'); from core.config import get_mount_point; subprocess.Popen(['xdg-open', get_mount_point()])"
 
 [Desktop Action Settings]
 Name=Preferências

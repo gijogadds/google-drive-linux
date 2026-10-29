@@ -220,8 +220,16 @@ class CrashReporter:
     @staticmethod
     def notify_desktop(title: str, message: str):
         """Send native Ubuntu / GNOME desktop notification."""
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons", "drive_fs.png")
         try:
-            subprocess.Popen(["notify-send", "-a", "Google Drive", "-i", "dialog-warning", title, message])
+            subprocess.Popen([
+                "notify-send",
+                "-a", "Google Drive",
+                "-i", icon_path if os.path.exists(icon_path) else "google-drive",
+                "-h", "string:desktop-entry:google-drive",
+                title,
+                message
+            ])
         except Exception:
             pass
 
