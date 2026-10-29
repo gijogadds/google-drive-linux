@@ -342,7 +342,7 @@ class GoogleDriveHomeWindow:
         popover.add(vbox)
         avatar_btn.connect("clicked", lambda _: popover.popup())
 
-    def _create_scaled_image(self, image_path: str, width: int = 120, height: int = 120) -> Gtk.Image:
+    def _create_scaled_image(self, image_path: str, width: int = 120, height: int = 120):
         """Load an SVG/PNG scaled cleanly via GdkPixbuf, preferring dark variants when dark theme is active."""
         img = Gtk.Image()
         img.set_halign(Gtk.Align.CENTER)
