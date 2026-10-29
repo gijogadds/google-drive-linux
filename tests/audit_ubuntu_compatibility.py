@@ -88,6 +88,15 @@ class UbuntuCompatibilityAuditor:
             "install.sh prioriza pacotes APT nativos do sistema e previne erro externally-managed-environment."
         )
 
+        req_txt = ROOT_DIR / "requirements.txt"
+        ci_yml = ROOT_DIR / ".github" / "workflows" / "ci.yml"
+        has_ci_deps = req_txt.exists() and ci_yml.exists() and "requirements.txt" in ci_yml.read_text(encoding="utf-8")
+        self.record(
+            "Manifesto requirements.txt presente para cache do GitHub Actions (actions/setup-python)",
+            has_ci_deps,
+            "Garante que actions/setup-python@v5 com cache: 'pip' encontre requirements.txt no CI."
+        )
+
     def audit_fuse3_interface(self):
         print("\n[AUDITORIA 2/8] Subsistema FUSE 3 (libfuse3 em Espaço de Usuário)...")
         from core.vfs import GoogleDriveFUSE, FuseOSError
