@@ -5,16 +5,37 @@ Compatible with Linux libfuse3 via fusepy or pyfuse3.
 """
 import os
 import sys
+import glob
 import errno
 import stat
 import time
+import ctypes.util
 from typing import Dict, Any, Optional, List
+
+# Auto-detect libfuse2 or libfuse3 shared library on Ubuntu 20.04 / 22.04 / 24.04 / 26.04+
+if "FUSE_LIBRARY_PATH" not in os.environ:
+    _detected_fuse = ctypes.util.find_library("fuse") or ctypes.util.find_library("fuse3")
+    if not _detected_fuse:
+        for _pattern in (
+            "/lib/*-linux-gnu/libfuse.so*",
+            "/usr/lib/*-linux-gnu/libfuse.so*",
+            "/lib/*-linux-gnu/libfuse3.so*",
+            "/usr/lib/*-linux-gnu/libfuse3.so*",
+            "/lib64/libfuse*.so*",
+        ):
+            _matches = sorted(glob.glob(_pattern))
+            if _matches:
+                _detected_fuse = _matches[0]
+                break
+    if _detected_fuse:
+        os.environ["FUSE_LIBRARY_PATH"] = _detected_fuse
 
 # Try importing fusepy; provide stub if running in environment without libfuse
 try:
     from fuse import FUSE, FuseOSError, Operations
-except ImportError:
-    # Stub for systems without fusepy installed yet
+except (ImportError, OSError, EnvironmentError):
+    # Stub for systems without fusepy or libfuse installed yet
+    FUSE = None
     class Operations:
         pass
     class FuseOSError(Exception):

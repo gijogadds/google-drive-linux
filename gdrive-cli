@@ -59,8 +59,8 @@ def cmd_login(args):
             "email": acc["email"],
             "display_name": acc.get("display_name", ""),
             "photo_url": acc.get("photo_url", ""),
-            "storage_total": 0,
-            "storage_used": 0,
+            "storage_total": acc.get("storage_total", 0),
+            "storage_used": acc.get("storage_used", 0),
             "is_active": 1,
             "auth_data": json.dumps(acc.get("tokens", {})),
             "last_sync": 0

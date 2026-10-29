@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/google-drive-linux/main.py
+ExecStart=/opt/google-drive-linux/main.py --daemon
 Restart=on-failure
 RestartSec=5s
 Environment=PYTHONUNBUFFERED=1

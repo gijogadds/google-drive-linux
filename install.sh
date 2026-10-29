@@ -47,6 +47,9 @@ apt-get install -y \
 # WebKit2 GTK (4.1 para Ubuntu 22.04 / 24.04 / 26.04+, ou 4.0 para Ubuntu 20.04)
 apt-get install -y gir1.2-webkit2-4.1 || apt-get install -y gir1.2-webkit2-4.0 || true
 
+# Garantir bibliotecas compartilhadas do FUSE (libfuse2t64 / libfuse2 / libfuse3) para o fusepy
+apt-get install -y libfuse2t64 || apt-get install -y libfuse2 || true
+
 # Suporte ao FUSE Python (compatível com PEP 668 no Ubuntu 24.04 e 26.04)
 if ! python3 -c "import fuse" 2>/dev/null; then
     apt-get install -y python3-fusepy || pip3 install --break-system-packages fusepy || pip3 install fusepy || true
@@ -72,6 +75,7 @@ cp "${SCRIPT_DIR}/gdrive-doc-launcher" "${INSTALL_DIR}/"
 chmod +x "${INSTALL_DIR}/main.py"
 chmod +x "${INSTALL_DIR}/gdrive-cli"
 chmod +x "${INSTALL_DIR}/gdrive-doc-launcher"
+chown -R "${TARGET_USER}:${TARGET_USER}" "${INSTALL_DIR}"
 
 echo -e "${BLUE}[3/6] Criando atalhos no PATH do sistema (/usr/local/bin)...${NC}"
 ln -sf "${INSTALL_DIR}/gdrive-cli" /usr/local/bin/gdrive-cli

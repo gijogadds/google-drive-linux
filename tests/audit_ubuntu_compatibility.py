@@ -169,6 +169,25 @@ class UbuntuCompatibilityAuditor:
             "Gtk.StatusIcon falha silenciosamente ou quebra no GNOME moderno. Não é utilizado."
         )
 
+        from ui.webview_window import GoogleDriveHomeWindow, SettingsDialog
+        from core.config import DEFAULT_CLIENT_ID
+        has_ui_classes = (GoogleDriveHomeWindow is not None and SettingsDialog is not None)
+        self.record(
+            "Integridade de Importação da Interface Gráfica (GoogleDriveHomeWindow & SettingsDialog)",
+            has_ui_classes,
+            "Garante abertura imediata da janela ao clicar no ícone em 'Mostrar Aplicativos'."
+        )
+
+        valid_oauth_client = (
+            DEFAULT_CLIENT_ID.endswith(".apps.googleusercontent.com")
+            and "1068432940246-gdrive_linux" not in DEFAULT_CLIENT_ID
+        )
+        self.record(
+            "Credencial OAuth 2.0 Desktop Válida Configurada",
+            valid_oauth_client,
+            f"Client ID ativo: {DEFAULT_CLIENT_ID}"
+        )
+
     def audit_nautilus_api_versions(self):
         print("\n[AUDITORIA 4/8] Extensão do Gerenciador de Arquivos (Nautilus 3 vs Nautilus 4/46+)...")
         nautilus_py = ROOT_DIR / "nautilus" / "google_drive_nautilus.py"

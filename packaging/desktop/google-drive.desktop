@@ -2,7 +2,7 @@
 Name=Google Drive
 GenericName=Armazenamento em Nuvem
 Comment=Acesse e sincronize seus arquivos do Google Drive
-Exec=/opt/google-drive-linux/main.py
+Exec=/opt/google-drive-linux/main.py --open-home
 Icon=/opt/google-drive-linux/assets/icons/drive_fs.png
 Terminal=false
 Type=Application
@@ -12,8 +12,8 @@ Actions=OpenFolder;Settings;
 
 [Desktop Action OpenFolder]
 Name=Abrir Pasta do Drive
-Exec=xdg-open %h/GoogleDrive
+Exec=sh -c 'xdg-open "$HOME/GoogleDrive"'
 
 [Desktop Action Settings]
 Name=Preferências
-Exec=/opt/google-drive-linux/gdrive-cli status
+Exec=/opt/google-drive-linux/main.py --settings

@@ -10,6 +10,7 @@ Replicates 100% of the Windows client screens and features with Linux-native enh
 import os
 import sys
 import subprocess
+import threading
 import webbrowser
 from typing import Dict, Any, Callable, Optional
 
@@ -33,12 +34,13 @@ except Exception:
 
 
 class GoogleDriveHomeWindow:
-    def __init__(self, config: Dict[str, Any], db, auth_manager=None, sync_worker=None, on_open_settings=None):
+    def __init__(self, config: Dict[str, Any], db, auth_manager=None, sync_worker=None, on_open_settings=None, on_account_connected=None):
         self.config = config
         self.db = db
         self.auth = auth_manager
         self.sync_worker = sync_worker
         self.on_open_settings = on_open_settings
+        self.on_account_connected = on_account_connected
         self.window = None
         self.stack = None
         self.gear_menu = None
@@ -48,9 +50,14 @@ class GoogleDriveHomeWindow:
             print("[UI] GTK não disponível.")
             return
 
+        if self.window is not None:
+            self.window.present()
+            return
+
         window = Gtk.Window(title="Google Drive")
         window.set_default_size(980, 680)
         window.set_position(Gtk.WindowPosition.CENTER)
+        window.connect("destroy", self._on_window_destroy)
 
         # Set official launcher icon (256x256 PNG)
         icon_path = os.path.join(
@@ -66,7 +73,11 @@ class GoogleDriveHomeWindow:
 
         self._build_interface(window)
         window.show_all()
+        window.present()
         self.window = window
+
+    def _on_window_destroy(self, _widget):
+        self.window = None
 
     def _build_interface(self, window):
         assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "html")
@@ -258,17 +269,20 @@ class GoogleDriveHomeWindow:
 
         # Big Avatar Circle (Image 2)
         acc = accounts[0] if accounts else {}
-        name = acc.get("display_name") or "Giovanni"
-        email = acc.get("email") or "ctm.planetjet@gmail.com"
-        initial = email[0].upper()
+        name = acc.get("display_name") or (acc.get("email", "").split("@")[0] if acc.get("email") else "Visitante")
+        email = acc.get("email") or "Nenhuma conta conectada"
+        initial = email[0].upper() if acc.get("email") else "G"
 
         avatar_big = Gtk.Label()
         avatar_big.set_markup(f"<span size='xx-large' background='#5c6bc0' foreground='white'><b>  {initial}  </b></span>")
         vbox.pack_start(avatar_big, False, False, 0)
 
-        # "Olá, Giovanni!" & Email
+        # "Olá, <Nome>!" & Email
         lbl_hello = Gtk.Label()
-        lbl_hello.set_markup(f"<big><b>Olá, {name}!</b></big>")
+        if accounts:
+            lbl_hello.set_markup(f"<big><b>Olá, {name}!</b></big>")
+        else:
+            lbl_hello.set_markup("<big><b>Conecte sua Conta Google</b></big>")
         vbox.pack_start(lbl_hello, False, False, 0)
 
         lbl_email = Gtk.Label(label=email)
@@ -278,15 +292,16 @@ class GoogleDriveHomeWindow:
         # Buttons: "+ Adicionar conta" & "↳ Desconectar conta"
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         btn_add = Gtk.Button(label="+ Adicionar conta")
-        btn_add.connect("clicked", lambda _: self._on_add_account())
+        btn_add.connect("clicked", lambda _: (popover.popdown(), self._on_add_account()))
         btn_row.pack_start(btn_add, True, True, 0)
 
-        btn_logout = Gtk.Button(label="⎋ Desconectar conta")
-        btn_logout.connect("clicked", lambda _: self._on_logout_account(acc.get("account_id")))
-        btn_row.pack_start(btn_logout, True, True, 0)
+        if accounts:
+            btn_logout = Gtk.Button(label="⎋ Desconectar conta")
+            btn_logout.connect("clicked", lambda _: (popover.popdown(), self._on_logout_account(acc.get("account_id"))))
+            btn_row.pack_start(btn_logout, True, True, 0)
         vbox.pack_start(btn_row, False, False, 5)
 
-        # Storage Card: "Armazenamento usado: 61% de 15 GB"
+        # Storage Card
         storage_frame = Gtk.Frame()
         storage_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         storage_box.set_margin_top(10)
@@ -295,7 +310,17 @@ class GoogleDriveHomeWindow:
         storage_box.set_margin_end(12)
 
         storage_lbl = Gtk.Label()
-        storage_lbl.set_markup("☁️ Armazenamento usado: <b>61% de 15 GB</b>")
+        used_bytes = acc.get("storage_used", 0)
+        total_bytes = acc.get("storage_total", 0)
+        if total_bytes > 0:
+            used_gb = used_bytes / (1024 ** 3)
+            total_gb = total_bytes / (1024 ** 3)
+            pct = int((used_bytes / total_bytes) * 100)
+            storage_lbl.set_markup(f"☁️ Armazenamento usado: <b>{pct}% de {total_gb:.0f} GB ({used_gb:.1f} GB)</b>")
+        elif accounts:
+            storage_lbl.set_markup("☁️ Armazenamento: <b>Conta Google conectada</b>")
+        else:
+            storage_lbl.set_markup("☁️ Armazenamento: <b>Faça login para sincronizar</b>")
         storage_lbl.set_alignment(0, 0.5)
         storage_box.pack_start(storage_lbl, False, False, 0)
 
@@ -649,8 +674,21 @@ class GoogleDriveHomeWindow:
         dialog.destroy()
 
     def _on_add_account(self):
-        if self.auth:
-            self.auth.login_interactive()
+        if not self.auth:
+            return
+
+        def _worker():
+            acc = self.auth.login_interactive()
+            if acc:
+                def _on_done():
+                    if self.on_account_connected:
+                        self.on_account_connected(acc)
+                    if self.window:
+                        self.window.destroy()
+                    self.show()
+                GLib.idle_add(_on_done)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _on_logout_account(self, account_id):
         dialog = Gtk.MessageDialog(
@@ -664,6 +702,205 @@ class GoogleDriveHomeWindow:
             with self.db._get_connection() as conn:
                 conn.execute("DELETE FROM accounts WHERE account_id = ?", (account_id,))
                 conn.commit()
-            self.window.destroy()
+            if self.auth and account_id in self.auth.accounts:
+                del self.auth.accounts[account_id]
+                self.auth._save_accounts_to_disk()
+            if self.window:
+                self.window.destroy()
             self.show()
         dialog.destroy()
+
+
+class SettingsDialog:
+    def __init__(self, config: Dict[str, Any], auth_manager, on_save_callback: Callable, on_account_connected: Optional[Callable] = None):
+        self.config = config
+        self.auth_manager = auth_manager
+        self.on_save = on_save_callback
+        self.on_account_connected = on_account_connected
+        self.window = None
+
+    def show(self):
+        if not HAS_GTK:
+            return
+
+        if self.window is not None:
+            self.window.present()
+            return
+
+        window = Gtk.Window(title="Google Drive - Preferências")
+        window.set_default_size(580, 520)
+        window.set_position(Gtk.WindowPosition.CENTER)
+        window.connect("destroy", lambda _: setattr(self, "window", None))
+
+        icon_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "assets", "icons", "drive_fs.png"
+        )
+        if os.path.exists(icon_path):
+            try:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(icon_path)
+                window.set_icon(pixbuf)
+            except Exception:
+                pass
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
+        vbox.set_margin_top(20)
+        vbox.set_margin_bottom(20)
+        vbox.set_margin_start(20)
+        vbox.set_margin_end(20)
+        window.add(vbox)
+
+        title_label = Gtk.Label()
+        title_label.set_markup("<big><b>Preferências do Google Drive</b></big>")
+        title_label.set_alignment(0, 0.5)
+        vbox.pack_start(title_label, False, False, 0)
+
+        # Accounts Box
+        acc_frame = Gtk.Frame(label="Contas Conectadas")
+        acc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        acc_box.set_margin_top(10)
+        acc_box.set_margin_start(10)
+        acc_box.set_margin_end(10)
+        acc_box.set_margin_bottom(10)
+
+        accounts = self.auth_manager.accounts if self.auth_manager else {}
+        if accounts:
+            for acc_id, acc_info in accounts.items():
+                lbl = Gtk.Label(label=f"✓ {acc_info.get('email')} ({acc_info.get('display_name', '')})")
+                lbl.set_alignment(0, 0.5)
+                acc_box.pack_start(lbl, False, False, 0)
+        else:
+            lbl = Gtk.Label(label="Nenhuma conta conectada.")
+            lbl.set_alignment(0, 0.5)
+            acc_box.pack_start(lbl, False, False, 0)
+
+        btn_login = Gtk.Button(label="+ Adicionar Conta Google (Login no Navegador)")
+        btn_login.connect("clicked", lambda _: self._on_login(window, btn_login))
+        acc_box.pack_start(btn_login, False, False, 0)
+        acc_frame.add(acc_box)
+        vbox.pack_start(acc_frame, False, False, 0)
+
+        # Mount Point & Sync Mode
+        sync_frame = Gtk.Frame(label="Opções de Sincronização")
+        sync_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        sync_box.set_margin_top(10)
+        sync_box.set_margin_start(10)
+        sync_box.set_margin_end(10)
+        sync_box.set_margin_bottom(10)
+
+        stream_rb = Gtk.RadioButton.new_with_label_from_widget(
+            None,
+            "Transmitir arquivos (Apenas online sob demanda - Economiza espaço)"
+        )
+        stream_rb.set_active(self.config.get("sync_mode") == "stream")
+        mirror_rb = Gtk.RadioButton.new_with_label_from_widget(
+            stream_rb,
+            "Espelhar arquivos (Disponível offline localmente)"
+        )
+        mirror_rb.set_active(self.config.get("sync_mode") == "mirror")
+
+        sync_box.pack_start(stream_rb, False, False, 0)
+        sync_box.pack_start(mirror_rb, False, False, 0)
+
+        # Helper for folder browser
+        def _choose_folder(parent, entry):
+            dialog = Gtk.FileChooserDialog(
+                title="Selecione um Diretório (ex: na sua HD Externa)",
+                transient_for=parent,
+                action=Gtk.FileChooserAction.SELECT_FOLDER
+            )
+            dialog.add_buttons(
+                "Cancelar", Gtk.ResponseType.CANCEL,
+                "Selecionar", Gtk.ResponseType.OK
+            )
+            if dialog.run() == Gtk.ResponseType.OK:
+                entry.set_text(dialog.get_filename())
+            dialog.destroy()
+
+        # Mount Point Entry
+        path_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        path_label = Gtk.Label(label="Ponto de Montagem:")
+        path_entry = Gtk.Entry()
+        path_entry.set_text(self.config.get("mount_point", os.path.expanduser("~/GoogleDrive")))
+        btn_browse_mount = Gtk.Button(label="Procurar...")
+        btn_browse_mount.connect("clicked", lambda _: _choose_folder(window, path_entry))
+
+        path_box.pack_start(path_label, False, False, 0)
+        path_box.pack_start(path_entry, True, True, 0)
+        path_box.pack_start(btn_browse_mount, False, False, 0)
+        sync_box.pack_start(path_box, False, False, 0)
+
+        # Cache & Offline Storage Directory (Ideal for External HD)
+        cache_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        cache_label = Gtk.Label(label="Pasta de Cache / Offline:")
+        cache_entry = Gtk.Entry()
+        default_cache = self.config.get("cache_dir", os.path.expanduser("~/.cache/google-drive-linux"))
+        cache_entry.set_text(default_cache)
+        btn_browse_cache = Gtk.Button(label="Procurar...")
+        btn_browse_cache.connect("clicked", lambda _: _choose_folder(window, cache_entry))
+
+        cache_box.pack_start(cache_label, False, False, 0)
+        cache_box.pack_start(cache_entry, True, True, 0)
+        cache_box.pack_start(btn_browse_cache, False, False, 0)
+        sync_box.pack_start(cache_box, False, False, 0)
+
+        sync_frame.add(sync_box)
+        vbox.pack_start(sync_frame, False, False, 0)
+
+        # Bottom Buttons
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btn_box.set_halign(Gtk.Align.END)
+
+        btn_cancel = Gtk.Button(label="Cancelar")
+        btn_cancel.connect("clicked", lambda _: window.destroy())
+        btn_box.pack_start(btn_cancel, False, False, 0)
+
+        btn_save = Gtk.Button(label="Salvar e Aplicar")
+
+        def _save(_):
+            self.config["sync_mode"] = "mirror" if mirror_rb.get_active() else "stream"
+            self.config["mount_point"] = path_entry.get_text()
+            self.config["cache_dir"] = cache_entry.get_text()
+            if self.on_save:
+                self.on_save(self.config)
+            window.destroy()
+
+        btn_save.connect("clicked", _save)
+        btn_box.pack_start(btn_save, False, False, 0)
+        vbox.pack_start(btn_box, False, False, 0)
+
+        self.window = window
+        window.show_all()
+        window.present()
+
+    def _on_login(self, parent_window, btn_login):
+        if not self.auth_manager:
+            return
+        btn_login.set_sensitive(False)
+        btn_login.set_label("Aguardando conclusão do login no navegador...")
+
+        def _worker():
+            acc = self.auth_manager.login_interactive()
+
+            def _on_done():
+                if acc:
+                    if self.on_account_connected:
+                        self.on_account_connected(acc)
+                    dialog = Gtk.MessageDialog(
+                        transient_for=parent_window,
+                        message_type=Gtk.MessageType.INFO,
+                        buttons=Gtk.ButtonsType.OK,
+                        text=f"Conta conectada com sucesso: {acc.get('email')}!"
+                    )
+                    dialog.run()
+                    dialog.destroy()
+                    if self.window:
+                        self.window.destroy()
+                    self.show()
+                else:
+                    btn_login.set_sensitive(True)
+                    btn_login.set_label("+ Adicionar Conta Google (Login no Navegador)")
+
+            GLib.idle_add(_on_done)
+
+        threading.Thread(target=_worker, daemon=True).start()

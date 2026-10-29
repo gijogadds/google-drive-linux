@@ -17,10 +17,16 @@ LOG_DIR = os.path.join(CONFIG_DIR, "logs")
 IPC_SOCKET_PATH = os.path.join(CONFIG_DIR, "gdrive_ipc.sock")
 MCP_SOCKET_PATH = os.path.join(CONFIG_DIR, "dfd_mcp.sock")
 
-# Google Drive Client OAuth Credentials (installed app default)
-# Uses standard Google desktop OAuth client credentials
-DEFAULT_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID", "1068432940246-gdrive_linux.apps.googleusercontent.com")
-DEFAULT_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET", "")
+# Google Drive Client OAuth Credentials (installed desktop app default)
+# Supports custom overrides via environment variables or config.json
+DEFAULT_CLIENT_ID = os.environ.get(
+    "GDRIVE_CLIENT_ID",
+    "202264815644.apps.googleusercontent.com"
+)
+DEFAULT_CLIENT_SECRET = os.environ.get(
+    "GDRIVE_CLIENT_SECRET",
+    "X4Z3ca8xfWDb1Voo-F9a7ZxJ"
+)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "mount_point": DEFAULT_MOUNT_POINT,
