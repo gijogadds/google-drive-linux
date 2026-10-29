@@ -146,8 +146,10 @@ class GoogleDriveHomeWindow:
 
         # Account Avatar Circle -> Abre o Popover Exato da Imagem 2
         accounts = self.db.get_accounts()
-        initial = accounts[0]["email"][0].upper() if accounts else "G"
-        avatar_btn = Gtk.Button(label=f" {initial} ")
+        acc = accounts[0] if accounts else {}
+        avatar_btn = Gtk.Button()
+        avatar_btn.set_relief(Gtk.ReliefStyle.NONE)
+        avatar_btn.add(self._create_avatar_widget(acc, size=32))
         avatar_btn.set_tooltip_text("Conta do Google")
         self._build_account_popover(avatar_btn, accounts)
         header.pack_start(avatar_btn, False, False, 0)
@@ -261,6 +263,73 @@ class GoogleDriveHomeWindow:
         menu.show_all()
         self.gear_menu = menu
 
+    def _create_avatar_widget(self, acc: Dict[str, Any], size: int = 32):
+        """Render a circular Google profile photo (or circular initial badge fallback) at the requested size."""
+        import math
+        import urllib.request
+
+        photo_url = (acc.get("photo_url") or "").strip()
+        account_id = acc.get("account_id") or "default"
+        email = acc.get("email") or "G"
+        initial = email[0].upper() if email else "G"
+
+        cache_dir = os.path.expanduser("~/.cache/google-drive-linux/avatars")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f"{account_id}.png")
+
+        if photo_url and (not os.path.exists(cache_path) or os.path.getsize(cache_path) == 0):
+            try:
+                # Request high-res square crop from Google User Content
+                hi_res_url = photo_url.replace("=s96-c", "=s192-c")
+                req = urllib.request.Request(hi_res_url, headers={"User-Agent": "GoogleDriveLinux/1.0"})
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    data = resp.read()
+                    if data:
+                        with open(cache_path, "wb") as f:
+                            f.write(data)
+            except Exception as e:
+                print(f"[UI] Aviso ao baixar foto de perfil: {e}")
+
+        try:
+            import cairo
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+            ctx = cairo.Context(surface)
+            ctx.arc(size / 2.0, size / 2.0, size / 2.0, 0, 2 * math.pi)
+            ctx.clip()
+
+            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+                raw_pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(cache_path, size, size, True)
+                Gdk.cairo_set_source_pixbuf(ctx, raw_pb, 0, 0)
+                ctx.paint()
+            else:
+                ctx.set_source_rgb(0.36, 0.42, 0.75)  # #5c6bc0
+                ctx.paint()
+                ctx.set_source_rgb(1.0, 1.0, 1.0)
+                ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+                ctx.set_font_size(size * 0.5)
+                extents = ctx.text_extents(initial)
+                x = (size - extents.width) / 2.0 - extents.x_bearing
+                y = (size - extents.height) / 2.0 - extents.y_bearing
+                ctx.move_to(x, y)
+                ctx.show_text(initial)
+
+            circle_pb = Gdk.pixbuf_get_from_surface(surface, 0, 0, size, size)
+            if circle_pb is not None:
+                return Gtk.Image.new_from_pixbuf(circle_pb)
+        except Exception as e:
+            print(f"[UI] Fallback ao renderizar avatar circular: {e}")
+
+        if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+            try:
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(cache_path, size, size, True)
+                return Gtk.Image.new_from_pixbuf(pb)
+            except Exception:
+                pass
+
+        lbl = Gtk.Label()
+        lbl.set_markup(f"<span size='large' background='#5c6bc0' foreground='white'><b>  {initial}  </b></span>")
+        return lbl
+
     # =========================================================================
     # POPUP 2: MODAL DA CONTA (Imagem 2 enviada pelo usuário)
     # =========================================================================
@@ -287,10 +356,8 @@ class GoogleDriveHomeWindow:
         acc = accounts[0] if accounts else {}
         name = acc.get("display_name") or (acc.get("email", "").split("@")[0] if acc.get("email") else "Visitante")
         email = acc.get("email") or "Nenhuma conta conectada"
-        initial = email[0].upper() if acc.get("email") else "G"
 
-        avatar_big = Gtk.Label()
-        avatar_big.set_markup(f"<span size='xx-large' background='#5c6bc0' foreground='white'><b>  {initial}  </b></span>")
+        avatar_big = self._create_avatar_widget(acc, size=72)
         vbox.pack_start(avatar_big, False, False, 0)
 
         # "Olá, <Nome>!" & Email
@@ -346,6 +413,29 @@ class GoogleDriveHomeWindow:
 
         storage_frame.add(storage_box)
         vbox.pack_start(storage_frame, False, False, 5)
+
+        # List additional connected accounts if more than 1 account exists
+        if len(accounts) > 1:
+            others_frame = Gtk.Frame(label="Outras contas conectadas")
+            others_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            others_box.set_margin_top(8)
+            others_box.set_margin_bottom(8)
+            others_box.set_margin_start(10)
+            others_box.set_margin_end(10)
+            for other_acc in accounts[1:]:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                row.pack_start(self._create_avatar_widget(other_acc, size=28), False, False, 0)
+                lbl_o = Gtk.Label(label=other_acc.get("email", ""))
+                lbl_o.set_alignment(0, 0.5)
+                lbl_o.set_ellipsize(3)
+                row.pack_start(lbl_o, True, True, 0)
+                btn_sw = Gtk.Button(label="Usar")
+                other_id = other_acc.get("account_id")
+                btn_sw.connect("clicked", lambda _, aid=other_id: (popover.popdown(), self._on_switch_account(aid)))
+                row.pack_start(btn_sw, False, False, 0)
+                others_box.pack_start(row, False, False, 0)
+            others_frame.add(others_box)
+            vbox.pack_start(others_frame, False, False, 4)
 
         # Footer
         footer_lbl = Gtk.Label()
@@ -932,20 +1022,136 @@ class GoogleDriveHomeWindow:
         dialog.run()
         dialog.destroy()
 
+    def _on_switch_account(self, account_id: str):
+        if not account_id:
+            return
+        try:
+            accs = self.db.get_accounts()
+            chosen = next((a for a in accs if a.get("account_id") == account_id), None)
+            if chosen:
+                # Re-insert with newest last_sync or reorder by updating rowid/last_sync
+                with self.db._get_connection() as conn:
+                    conn.execute("UPDATE accounts SET last_sync = last_sync + 1 WHERE account_id = ?", (account_id,))
+                    conn.commit()
+                if self.on_account_connected:
+                    self.on_account_connected(chosen)
+                if self.window:
+                    self.window.destroy()
+                self.show()
+        except Exception as e:
+            print(f"[UI] Erro ao alternar conta: {e}")
+
     def _on_add_account(self):
         if not self.auth:
             return
 
+        has_existing = len(self.db.get_accounts()) > 0
+        prompt_dlg = Gtk.Dialog(
+            title="Adicionar Conta do Google",
+            transient_for=self.window,
+            flags=0
+        )
+        prompt_dlg.add_buttons(
+            "Cancelar", Gtk.ResponseType.CANCEL,
+            "Continuar no Navegador", Gtk.ResponseType.OK
+        )
+        prompt_dlg.set_default_size(460, 210)
+        area = prompt_dlg.get_content_area()
+        area.set_spacing(10)
+        area.set_margin_top(15)
+        area.set_margin_bottom(15)
+        area.set_margin_start(18)
+        area.set_margin_end(18)
+
+        lbl_info = Gtk.Label()
+        lbl_info.set_markup(
+            "<b>Conectar Conta do Google Drive</b>\n"
+            "<small>Informe o e-mail da conta Google que deseja conectar (opcional, mas recomendado "
+            "para ir direto à conta desejada):</small>"
+        )
+        lbl_info.set_line_wrap(True)
+        lbl_info.set_alignment(0, 0)
+        area.pack_start(lbl_info, False, False, 0)
+
+        email_entry = Gtk.Entry()
+        email_entry.set_placeholder_text("exemplo@gmail.com (opcional)")
+        email_entry.connect("activate", lambda _: prompt_dlg.response(Gtk.ResponseType.OK))
+        area.pack_start(email_entry, False, False, 0)
+
+        isolated_cb = Gtk.CheckButton(
+            label="Abrir em janela isolada/anônima (evita Erro 400 de múltiplas sessões no Chrome)"
+        )
+        isolated_cb.set_active(has_existing)
+        area.pack_start(isolated_cb, False, False, 4)
+
+        prompt_dlg.show_all()
+        resp = prompt_dlg.run()
+        login_hint = email_entry.get_text().strip()
+        use_isolated = isolated_cb.get_active()
+        prompt_dlg.destroy()
+
+        if resp != Gtk.ResponseType.OK:
+            return
+
+        wait_dlg = Gtk.MessageDialog(
+            transient_for=self.window,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.CANCEL,
+            text="Aguardando conclusão do login no navegador..."
+        )
+        wait_dlg.format_secondary_text(
+            "Conclua a autenticação na janela do navegador que foi aberta.\n"
+            "Esta janela será atualizada automaticamente assim que o Google confirmar o acesso."
+        )
+
+        def _on_wait_response(_dlg, response_id):
+            if response_id == Gtk.ResponseType.CANCEL:
+                from core.auth import OAuthCallbackHandler
+                OAuthCallbackHandler.error = "access_denied"
+                wait_dlg.destroy()
+
+        wait_dlg.connect("response", _on_wait_response)
+        wait_dlg.show_all()
+
         def _worker():
-            acc = self.auth.login_interactive()
-            if acc:
-                def _on_done():
+            acc = self.auth.login_interactive(login_hint=login_hint, isolated_session=use_isolated)
+
+            def _on_done():
+                try:
+                    wait_dlg.destroy()
+                except Exception:
+                    pass
+
+                if acc:
                     if self.on_account_connected:
                         self.on_account_connected(acc)
+                    ok_dlg = Gtk.MessageDialog(
+                        transient_for=self.window,
+                        message_type=Gtk.MessageType.INFO,
+                        buttons=Gtk.ButtonsType.OK,
+                        text="Conta Google Conectada com Sucesso!"
+                    )
+                    ok_dlg.format_secondary_text(
+                        f"A conta {acc.get('display_name') or ''} ({acc.get('email')}) foi autenticada e adicionada ao Google Drive."
+                    )
+                    ok_dlg.run()
+                    ok_dlg.destroy()
                     if self.window:
                         self.window.destroy()
                     self.show()
-                GLib.idle_add(_on_done)
+                else:
+                    err_msg = getattr(self.auth, "last_error", None) or "Não foi possível concluir a autenticação com o Google."
+                    err_dlg = Gtk.MessageDialog(
+                        transient_for=self.window,
+                        message_type=Gtk.MessageType.ERROR,
+                        buttons=Gtk.ButtonsType.OK,
+                        text="Não foi possível concluir o login da conta"
+                    )
+                    err_dlg.format_secondary_text(err_msg)
+                    err_dlg.run()
+                    err_dlg.destroy()
+
+            GLib.idle_add(_on_done)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1209,6 +1415,16 @@ class SettingsDialog:
                 else:
                     btn_login.set_sensitive(True)
                     btn_login.set_label("+ Adicionar Conta Google (Login no Navegador)")
+                    err_msg = getattr(self.auth_manager, "last_error", None) or "Não foi possível concluir a autenticação com o Google."
+                    err_dlg = Gtk.MessageDialog(
+                        transient_for=parent_window,
+                        message_type=Gtk.MessageType.ERROR,
+                        buttons=Gtk.ButtonsType.OK,
+                        text="Não foi possível concluir o login da conta"
+                    )
+                    err_dlg.format_secondary_text(err_msg)
+                    err_dlg.run()
+                    err_dlg.destroy()
 
             GLib.idle_add(_on_done)
 

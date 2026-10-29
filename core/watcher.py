@@ -148,6 +148,9 @@ class SyncWorker(threading.Thread):
         if not about:
             return
         quota = about.get("storageQuota", {})
+        user = about.get("user", {})
+        photo_link = user.get("photoLink", "")
+        display_name = user.get("displayName", "")
         total = int(quota.get("limit", 0))
         used = int(quota.get("usage", 0))
         drive_used = int(quota.get("usageInDrive", 0)) or used
@@ -156,8 +159,16 @@ class SyncWorker(threading.Thread):
         if total > 0 or used > 0:
             with self.db._get_connection() as conn:
                 conn.execute(
-                    "UPDATE accounts SET storage_total = ?, storage_used = ?, last_sync = ? WHERE account_id = ?",
-                    (total, used, int(time.time()), self.account_id)
+                    """
+                    UPDATE accounts
+                    SET storage_total = ?,
+                        storage_used = ?,
+                        photo_url = CASE WHEN ? != '' THEN ? ELSE photo_url END,
+                        display_name = CASE WHEN ? != '' THEN ? ELSE display_name END,
+                        last_sync = ?
+                    WHERE account_id = ?
+                    """,
+                    (total, used, photo_link, photo_link, display_name, display_name, int(time.time()), self.account_id)
                 )
                 conn.commit()
 

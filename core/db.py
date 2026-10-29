@@ -270,7 +270,7 @@ class MetadataDB:
     def get_accounts(self) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM accounts WHERE is_active = 1")
+            cursor.execute("SELECT * FROM accounts WHERE is_active = 1 ORDER BY last_sync DESC")
             return [dict(row) for row in cursor.fetchall()]
 
     def upsert_account(self, account_data: Dict[str, Any]):

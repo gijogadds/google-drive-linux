@@ -5,6 +5,7 @@ Handles interactive browser login, token refresh, and credential storage via Lin
 import os
 import sys
 import json
+import time
 import base64
 import hashlib
 import secrets
@@ -126,6 +127,7 @@ class AuthManager:
         self.client_id = client_id or cfg.get("client_id") or DEFAULT_CLIENT_ID
         self.client_secret = client_secret if client_secret is not None else (cfg.get("client_secret") or DEFAULT_CLIENT_SECRET)
         self.accounts = self._load_accounts_from_disk()
+        self.last_error: Optional[str] = None
 
     def _load_accounts_from_disk(self) -> Dict[str, Any]:
         if os.path.exists(ACCOUNTS_FILE_PATH):
@@ -144,13 +146,54 @@ class AuthManager:
         except Exception:
             pass
 
-    def login_interactive(self) -> Optional[Dict[str, Any]]:
+    def _open_oauth_browser(self, auth_url: str, isolated: bool = False):
+        """Open the OAuth URL in the user's browser, using an isolated/incognito window when adding a second account to prevent Google's authuser=1 HTTP 400 error."""
+        import shutil
+        import subprocess
+
+        if isolated:
+            # 1. Check native Chromium/Chrome/Brave/Edge binaries
+            for bin_name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge"):
+                path = shutil.which(bin_name)
+                if path:
+                    try:
+                        subprocess.Popen([path, "--incognito", auth_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return
+                    except Exception:
+                        pass
+
+            # 2. Check Flatpak Chrome/Chromium/Brave/Edge
+            if shutil.which("flatpak"):
+                for app_id in ("com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser", "com.microsoft.Edge"):
+                    try:
+                        chk = subprocess.run(["flatpak", "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        if chk.returncode == 0:
+                            subprocess.Popen(["flatpak", "run", app_id, "--incognito", auth_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            return
+                    except Exception:
+                        pass
+
+            # 3. Check Firefox
+            ff_path = shutil.which("firefox")
+            if ff_path:
+                try:
+                    subprocess.Popen([ff_path, "--private-window", auth_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+                except Exception:
+                    pass
+
+        webbrowser.open(auth_url)
+
+    def login_interactive(self, login_hint: Optional[str] = None, isolated_session: Optional[bool] = None) -> Optional[Dict[str, Any]]:
         """Start local HTTP callback server and open browser for Google OAuth."""
+        self.last_error = None
         OAuthCallbackHandler.auth_code = None
         OAuthCallbackHandler.error = None
 
         server = HTTPServer(("127.0.0.1", 0), OAuthCallbackHandler)
         server.timeout = 180
+        server.timed_out = False
+        server.handle_timeout = lambda: setattr(server, "timed_out", True)
         port = server.server_port
         redirect_uri = f"http://127.0.0.1:{port}"
 
@@ -165,34 +208,55 @@ class AuthManager:
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "access_type": "offline",
-            "prompt": "consent"
+            "prompt": "select_account consent",
+            "state": secrets.token_urlsafe(16),
         }
+        if login_hint and login_hint.strip():
+            auth_params["login_hint"] = login_hint.strip()
 
         auth_url = f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(auth_params)}"
-        print(f"[Auth] Abrindo navegador para login: {auth_url}")
-        webbrowser.open(auth_url)
+        use_isolated = isolated_session if isolated_session is not None else (len(self.accounts) > 0)
+        print(f"[Auth] Abrindo navegador para login (isolado={use_isolated}): {auth_url}")
+        self._open_oauth_browser(auth_url, isolated=use_isolated)
 
         # Wait for OAuth callback (ignoring incidental requests like /favicon.ico)
-        while OAuthCallbackHandler.auth_code is None and OAuthCallbackHandler.error is None:
+        deadline = time.time() + 180
+        while (
+            OAuthCallbackHandler.auth_code is None
+            and OAuthCallbackHandler.error is None
+            and not getattr(server, "timed_out", False)
+            and time.time() < deadline
+        ):
             server.handle_request()
-            if OAuthCallbackHandler.auth_code is None and OAuthCallbackHandler.error is None:
-                # Timeout reached or empty request
-                break
         server.server_close()
 
         code = OAuthCallbackHandler.auth_code
         if not code:
-            print(f"[Auth] Erro no login: {OAuthCallbackHandler.error or 'tempo esgotado'}")
+            err_code = OAuthCallbackHandler.error
+            if err_code == "access_denied":
+                self.last_error = "O acesso foi recusado ou cancelado na tela de autorização do Google."
+            elif err_code:
+                self.last_error = f"O servidor do Google retornou um erro de autorização ({err_code})."
+            else:
+                self.last_error = (
+                    "O tempo limite de 3 minutos para concluir o login no navegador expirou "
+                    "ou a página de autorização foi fechada antes da conclusão.\n\n"
+                    "Dica: Ao adicionar uma segunda conta no Chrome, informe o e-mail da conta "
+                    "no campo opcional para abrir a autorização diretamente nela e evitar o Erro 400 de múltiplas sessões."
+                )
+            print(f"[Auth] Erro no login: {self.last_error}")
             return None
 
         # Exchange code for tokens
         token_data = self._exchange_code_for_tokens(code, verifier, redirect_uri)
         if not token_data or "access_token" not in token_data:
+            self.last_error = "Falha ao validar o código de autorização junto aos servidores do Google OAuth."
             return None
 
         # Fetch profile
         profile = self.get_user_profile(token_data["access_token"])
         if not profile:
+            self.last_error = "Não foi possível obter os dados de perfil da Conta Google autenticada."
             return None
 
         # Fetch storage quota if available
@@ -225,7 +289,7 @@ class AuthManager:
                 "storage_used": storage_used,
                 "is_active": 1,
                 "auth_data": json.dumps(token_data),
-                "last_sync": 0
+                "last_sync": int(time.time())
             })
         except Exception as e:
             print(f"[Auth] Aviso ao sincronizar conta no banco SQLite: {e}")
