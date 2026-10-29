@@ -391,9 +391,8 @@ def _sync_gtk_bookmark(mount_point: str, enable_bookmark: bool):
 
 
 def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False):
-    """Mount the Google Drive FUSE filesystem on Ubuntu (with automatic AppArmor authorization for /run/media)."""
+    """Mount the Google Drive FUSE filesystem on Ubuntu (with automatic fallback for AppArmor /run/media)."""
     import subprocess
-    from core.config import ensure_apparmor_allows_mount
     fallback_mount = os.path.expanduser("~/.cache/google-drive-linux/fuse_mnt")
     subprocess.run(["fusermount3", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
     subprocess.run(["fusermount", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
@@ -406,7 +405,6 @@ def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foregr
         except OSError:
             pass
 
-    ensure_apparmor_allows_mount(mount_point)
     os.makedirs(mount_point, exist_ok=True)
     fs = GoogleDriveFUSE(db, cache_manager, api, account_id)
     print(f"[VFS] Montando Google Drive em: {mount_point}")
