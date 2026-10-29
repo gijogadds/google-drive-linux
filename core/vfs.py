@@ -365,6 +365,31 @@ Categories=Office;{category};
         )
 
 
+def _sync_gtk_bookmark(mount_point: str, enable_bookmark: bool):
+    """Ensure Nautilus left sidebar always shows GoogleDrive pointing to mount_point."""
+    import urllib.parse
+    bookmarks_file = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
+    os.makedirs(os.path.dirname(bookmarks_file), exist_ok=True)
+    uri = "file://" + urllib.parse.quote(mount_point)
+    target_line = f"{uri} GoogleDrive"
+    lines = []
+    if os.path.exists(bookmarks_file):
+        try:
+            with open(bookmarks_file, "r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+        except Exception:
+            lines = []
+    # Remove any old GoogleDrive bookmark entries
+    filtered = [ln for ln in lines if not ln.endswith(" GoogleDrive") and "GoogleDrive" not in ln]
+    if enable_bookmark:
+        filtered.append(target_line)
+    try:
+        with open(bookmarks_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(filtered) + ("\n" if filtered else ""))
+    except Exception:
+        pass
+
+
 def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False):
     """Mount the Google Drive FUSE filesystem on Ubuntu (with automatic AppArmor authorization for /run/media)."""
     import subprocess
@@ -387,6 +412,7 @@ def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foregr
     print(f"[VFS] Montando Google Drive em: {mount_point}")
     try:
         if FUSE is not None:
+            _sync_gtk_bookmark(mount_point, enable_bookmark=False)
             FUSE(fs, mount_point, nothreads=False, foreground=foreground, allow_other=False)
     except Exception as e:
         print(f"[VFS] Montagem direta em '{mount_point}' bloqueada pelo AppArmor ({e}); ativando ponte FUSE transparente...")
@@ -397,6 +423,7 @@ def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foregr
                     os.rmdir(mount_point)
             if not os.path.exists(mount_point) and not os.path.islink(mount_point):
                 os.symlink(fallback_mount, mount_point)
+            _sync_gtk_bookmark(mount_point, enable_bookmark=True)
             if FUSE is not None:
                 FUSE(fs, fallback_mount, nothreads=False, foreground=foreground, allow_other=False)
         except Exception as e2:
