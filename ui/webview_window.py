@@ -340,20 +340,51 @@ class GoogleDriveHomeWindow:
         popover.add(vbox)
         avatar_btn.connect("clicked", lambda _: popover.popup())
 
+    def _create_scaled_image(self, image_path: str, width: int = 120, height: int = 120) -> Gtk.Image:
+        """Load an SVG/PNG scaled cleanly via GdkPixbuf, preferring dark variants when dark theme is active."""
+        img = Gtk.Image()
+        img.set_halign(Gtk.Align.CENTER)
+        img.set_valign(Gtk.Align.CENTER)
+        if not image_path:
+            return img
+
+        resolved = image_path
+        # Check if dark theme is preferred or dark variant exists
+        if resolved.endswith(".svg") and not resolved.endswith("-dark.svg"):
+            dark_candidate = resolved[:-4] + "-dark.svg"
+            if os.path.exists(dark_candidate):
+                resolved = dark_candidate
+
+        if not os.path.exists(resolved):
+            if os.path.exists(image_path):
+                resolved = image_path
+            else:
+                return img
+
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(resolved, width, height, True)
+            img.set_from_pixbuf(pixbuf)
+        except Exception:
+            img.set_from_file(resolved)
+        return img
+
     # =========================================================================
     # PÁGINA 1: INÍCIO (Dashboard de Cartões)
     # =========================================================================
     def _create_page_home(self, assets_dir):
         scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
-        content.set_margin_top(25)
-        content.set_margin_bottom(25)
-        content.set_margin_start(25)
-        content.set_margin_end(25)
+        content.set_margin_top(20)
+        content.set_margin_bottom(20)
+        content.set_margin_start(20)
+        content.set_margin_end(20)
 
         grid = Gtk.Grid()
-        grid.set_column_spacing(20)
-        grid.set_row_spacing(20)
+        grid.set_column_spacing(18)
+        grid.set_row_spacing(18)
+        grid.set_column_homogeneous(True)
+        grid.set_hexpand(True)
 
         # Card 1: Dog Card (Status de Sincronização)
         card1 = self._create_card(
@@ -386,7 +417,8 @@ class GoogleDriveHomeWindow:
 
         # Card 4: Links Rápidos
         card4 = Gtk.Frame(label="Links rápidos")
-        box4 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card4.set_hexpand(True)
+        box4 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box4.set_margin_top(15)
         box4.set_margin_bottom(15)
         box4.set_margin_start(15)
@@ -462,10 +494,8 @@ class GoogleDriveHomeWindow:
         empty_box.set_valign(Gtk.Align.CENTER)
         empty_box.set_vexpand(True)
 
-        dog_img = Gtk.Image()
         dog_path = os.path.join(assets_dir, "Selling-point-1.svg")
-        if os.path.exists(dog_path):
-            dog_img.set_from_file(dog_path)
+        dog_img = self._create_scaled_image(dog_path, 150, 150)
         empty_box.pack_start(dog_img, False, False, 0)
 
         lbl_msg = Gtk.Label(label="As atividades nos seus arquivos e pastas vão aparecer aqui")
@@ -496,10 +526,8 @@ class GoogleDriveHomeWindow:
         empty_box.set_valign(Gtk.Align.CENTER)
         empty_box.set_vexpand(True)
 
-        flower_img = Gtk.Image()
         flower_path = os.path.join(assets_dir, "Selling-point-2.svg")
-        if os.path.exists(flower_path):
-            flower_img.set_from_file(flower_path)
+        flower_img = self._create_scaled_image(flower_path, 150, 150)
         empty_box.pack_start(flower_img, False, False, 0)
 
         lbl_flower_title = Gtk.Label()
@@ -515,37 +543,44 @@ class GoogleDriveHomeWindow:
 
     def _create_card(self, title, subtitle, desc, image_path, action_label=None, action_callback=None):
         frame = Gtk.Frame()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_margin_top(15)
-        box.set_margin_bottom(15)
-        box.set_margin_start(15)
-        box.set_margin_end(15)
-        box.set_size_request(320, 180)
+        frame.set_hexpand(True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(14)
+        box.set_margin_bottom(14)
+        box.set_margin_start(14)
+        box.set_margin_end(14)
+        box.set_size_request(280, 220)
 
         lbl_t = Gtk.Label()
         lbl_t.set_markup(f"<b><big>{title}</big></b>")
+        lbl_t.set_line_wrap(True)
+        lbl_t.set_max_width_chars(34)
         lbl_t.set_alignment(0, 0.5)
         box.pack_start(lbl_t, False, False, 0)
 
         lbl_s = Gtk.Label(label=subtitle)
         lbl_s.set_line_wrap(True)
+        lbl_s.set_max_width_chars(38)
         lbl_s.set_alignment(0, 0.5)
         box.pack_start(lbl_s, False, False, 0)
 
         if desc:
             lbl_d = Gtk.Label(label=desc)
             lbl_d.set_line_wrap(True)
+            lbl_d.set_max_width_chars(38)
+            lbl_d.set_opacity(0.75)
             lbl_d.set_alignment(0, 0.5)
             box.pack_start(lbl_d, False, False, 0)
 
-        if image_path and os.path.exists(image_path):
-            img = Gtk.Image.new_from_file(image_path)
-            box.pack_start(img, False, False, 5)
+        if image_path:
+            img = self._create_scaled_image(image_path, 115, 115)
+            box.pack_start(img, True, True, 4)
 
         if action_label and action_callback:
             btn = Gtk.Button(label=action_label)
+            btn.set_halign(Gtk.Align.START)
             btn.connect("clicked", lambda _: action_callback())
-            box.pack_start(btn, False, False, 5)
+            box.pack_start(btn, False, False, 4)
 
         frame.add(box)
         return frame
@@ -844,6 +879,10 @@ class SettingsDialog:
         cache_box.pack_start(btn_browse_cache, False, False, 0)
         sync_box.pack_start(cache_box, False, False, 0)
 
+        autostart_cb = Gtk.CheckButton(label="Iniciar o Google Drive automaticamente ao fazer login no sistema")
+        autostart_cb.set_active(bool(self.config.get("autostart", True)))
+        sync_box.pack_start(autostart_cb, False, False, 4)
+
         sync_frame.add(sync_box)
         vbox.pack_start(sync_frame, False, False, 0)
 
@@ -861,6 +900,12 @@ class SettingsDialog:
             self.config["sync_mode"] = "mirror" if mirror_rb.get_active() else "stream"
             self.config["mount_point"] = path_entry.get_text()
             self.config["cache_dir"] = cache_entry.get_text()
+            self.config["autostart"] = autostart_cb.get_active()
+            try:
+                action = "enable" if self.config["autostart"] else "disable"
+                subprocess.run(["systemctl", "--user", action, "google-drive.service"], capture_output=True)
+            except Exception:
+                pass
             if self.on_save:
                 self.on_save(self.config)
             window.destroy()

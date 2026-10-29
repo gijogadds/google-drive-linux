@@ -105,13 +105,22 @@ cp "${INSTALL_DIR}/assets/icons/sheets.png" /usr/share/icons/hicolor/256x256/app
 cp "${INSTALL_DIR}/assets/icons/slides.png" /usr/share/icons/hicolor/256x256/apps/google-slides.png
 gtk-update-icon-cache /usr/share/icons/hicolor || true
 
-echo -e "${BLUE}[6/6] Configurando serviço de inicialização automática no systemd...${NC}"
+echo -e "${BLUE}[6/6] Configurando e ativando serviço de inicialização automática no systemd...${NC}"
 USER_SYSTEMD_DIR="${USER_HOME}/.config/systemd/user"
-su - "${TARGET_USER}" -c "mkdir -p ${USER_SYSTEMD_DIR}"
+USER_WANTS_DIR="${USER_SYSTEMD_DIR}/default.target.wants"
+TARGET_UID=$(id -u "${TARGET_USER}")
+mkdir -p "${USER_WANTS_DIR}"
 cp "${SCRIPT_DIR}/packaging/systemd/google-drive.service" "${USER_SYSTEMD_DIR}/"
-chown -R "${TARGET_USER}:${TARGET_USER}" "${USER_SYSTEMD_DIR}"
+ln -sf "${USER_SYSTEMD_DIR}/google-drive.service" "${USER_WANTS_DIR}/google-drive.service"
+chown -R "${TARGET_USER}:${TARGET_USER}" "${USER_HOME}/.config/systemd"
 
-su - "${TARGET_USER}" -c "systemctl --user daemon-reload || true"
+if [ -d "/run/user/${TARGET_UID}" ]; then
+    sudo -u "${TARGET_USER}" XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" systemctl --user daemon-reload || true
+    sudo -u "${TARGET_USER}" XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" systemctl --user enable --now google-drive.service || true
+else
+    su - "${TARGET_USER}" -c "systemctl --user daemon-reload || true"
+    su - "${TARGET_USER}" -c "systemctl --user enable google-drive.service || true"
+fi
 
 # Reiniciar Nautilus para carregar os badges
 su - "${TARGET_USER}" -c "nautilus -q || true"
@@ -122,6 +131,5 @@ echo -e "${GREEN}===============================================================
 echo -e "Como iniciar:"
 echo -e "  1. No terminal ou menu, execute: ${YELLOW}gdrive-cli login${NC} para autenticar com sua conta Google."
 echo -e "  2. O Google Drive será montado em: ${YELLOW}${USER_HOME}/GoogleDrive${NC}"
-echo -e "  3. Para ativar a inicialização automática no login:"
-echo -e "     ${YELLOW}systemctl --user enable --now google-drive.service${NC}"
+echo -e "  3. Inicialização automática no login: ${GREEN}ATIVADA POR PADRÃO${NC} (google-drive.service)"
 echo -e "=================================================================="

@@ -21,9 +21,26 @@ cp /opt/google-drive-linux/assets/icons/sheets.png /usr/share/icons/hicolor/256x
 cp /opt/google-drive-linux/assets/icons/slides.png /usr/share/icons/hicolor/256x256/apps/google-slides.png
 gtk-update-icon-cache /usr/share/icons/hicolor || true
 
+# Enable systemd user service by default for the installing user
+TARGET_USER="${SUDO_USER:-$USER}"
+if [ -n "${TARGET_USER}" ] && [ "${TARGET_USER}" != "root" ]; then
+    USER_HOME=$(eval echo "~${TARGET_USER}")
+    USER_SYSTEMD_DIR="${USER_HOME}/.config/systemd/user"
+    USER_WANTS_DIR="${USER_SYSTEMD_DIR}/default.target.wants"
+    TARGET_UID=$(id -u "${TARGET_USER}" 2>/dev/null || true)
+    mkdir -p "${USER_WANTS_DIR}"
+    cp /opt/google-drive-linux/packaging/systemd/google-drive.service "${USER_SYSTEMD_DIR}/" 2>/dev/null || true
+    ln -sf "${USER_SYSTEMD_DIR}/google-drive.service" "${USER_WANTS_DIR}/google-drive.service"
+    chown -R "${TARGET_USER}:${TARGET_USER}" "${USER_HOME}/.config/systemd"
+    if [ -n "${TARGET_UID}" ] && [ -d "/run/user/${TARGET_UID}" ]; then
+        sudo -u "${TARGET_USER}" XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" systemctl --user daemon-reload || true
+        sudo -u "${TARGET_USER}" XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" systemctl --user enable --now google-drive.service || true
+    fi
+fi
+
 # Restart Nautilus if running
 nautilus -q || true
 
-echo "Google Drive para Linux instalado com sucesso!"
+echo "Google Drive para Linux instalado com sucesso! (Inicialização automática ativada por padrão)"
 echo "Execute 'gdrive-cli login' para conectar sua conta."
 exit 0
