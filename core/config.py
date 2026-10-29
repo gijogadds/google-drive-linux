@@ -46,6 +46,40 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+def ensure_apparmor_allows_mount(mount_point: str) -> bool:
+    """Ensure Ubuntu 24.04/26.04+ AppArmor fusermount3 profile allows FUSE mounts under /run/media/."""
+    if not mount_point or not mount_point.startswith("/run/media/"):
+        return True
+    apparmor_profile = "/etc/apparmor.d/fusermount3"
+    local_override = "/etc/apparmor.d/local/fusermount3"
+    if not os.path.exists(apparmor_profile):
+        return True
+    try:
+        if os.path.exists(local_override):
+            with open(local_override, "r", encoding="utf-8") as f:
+                if "/run/media/**/" in f.read():
+                    return True
+    except Exception:
+        pass
+
+    rule_cmd = (
+        "mkdir -p /etc/apparmor.d/local && "
+        "printf 'mount fstype=@{fuse_types} options=(nosuid,nodev) options in (ro,rw,noatime,dirsync,nodiratime,noexec,sync) -> /run/media/**/,\n"
+        "umount /run/media/**/,\n' > /etc/apparmor.d/local/fusermount3 && "
+        "apparmor_parser -r /etc/apparmor.d/fusermount3"
+    )
+    try:
+        if os.geteuid() == 0:
+            res = subprocess.run(["sh", "-c", rule_cmd], capture_output=True)
+            return res.returncode == 0
+        elif os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+            res = subprocess.run(["pkexec", "sh", "-c", rule_cmd], capture_output=True)
+            return res.returncode == 0
+    except Exception:
+        pass
+    return False
+
+
 def unmount_fuse_path(path: str, remove_if_empty: bool = False):
     """Safely unmount a FUSE mountpoint (including symlinked AppArmor fallback) and optionally remove it if empty."""
     if not path:

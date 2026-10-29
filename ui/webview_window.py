@@ -1100,11 +1100,13 @@ class SettingsDialog:
         btn_save = Gtk.Button(label="Salvar e Aplicar")
 
         def _save(_):
+            from core.config import ensure_apparmor_allows_mount
             updated_config = dict(self.config)
             updated_config["sync_mode"] = "mirror" if mirror_rb.get_active() else "stream"
             updated_config["mount_point"] = path_entry.get_text().strip() or os.path.expanduser("~/GoogleDrive")
             updated_config["cache_dir"] = cache_entry.get_text().strip() or os.path.expanduser("~/.cache/google-drive-linux")
             updated_config["autostart"] = autostart_cb.get_active()
+            ensure_apparmor_allows_mount(updated_config["mount_point"])
             try:
                 action = "enable" if updated_config["autostart"] else "disable"
                 subprocess.run(["systemctl", "--user", action, "google-drive.service"], capture_output=True)

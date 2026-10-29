@@ -13,6 +13,7 @@ from core.config import (
     load_config,
     save_config,
     unmount_fuse_path,
+    ensure_apparmor_allows_mount,
     DEFAULT_MOUNT_POINT,
 )
 
@@ -174,6 +175,7 @@ def run_install_wizard() -> int:
         cfg["autostart"] = autostart_cb.get_active()
         cfg["start_at_login"] = autostart_cb.get_active()
 
+        ensure_apparmor_allows_mount(chosen_mount)
         if chosen_mount != DEFAULT_MOUNT_POINT and os.path.exists(DEFAULT_MOUNT_POINT):
             unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
 
