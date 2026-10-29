@@ -189,7 +189,8 @@ class MetadataDB:
                 SELECT
                     COUNT(*),
                     COALESCE(SUM(CASE WHEN is_directory = 0 THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN is_directory = 1 THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN is_directory = 1 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(size), 0)
                 FROM items
                 WHERE is_trashed = 0
             """)
@@ -197,6 +198,7 @@ class MetadataDB:
             total_items = row[0] if row else 0
             total_files = row[1] if row else 0
             total_dirs = row[2] if row else 0
+            indexed_bytes = row[3] if row else 0
             cursor.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending', 'running')")
             op_row = cursor.fetchone()
             pending_ops = op_row[0] if op_row else 0
@@ -204,6 +206,7 @@ class MetadataDB:
                 "total_items": total_items,
                 "total_files": total_files,
                 "total_dirs": total_dirs,
+                "indexed_bytes": indexed_bytes,
                 "pending_ops": pending_ops,
             }
 

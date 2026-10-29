@@ -431,8 +431,8 @@ class GoogleDriveHomeWindow:
         card1_box.pack_start(self.home_sync_desc_lbl, False, False, 0)
 
         self.home_sync_progress = Gtk.ProgressBar()
-        self.home_sync_progress.set_no_show_all(True)
-        card1_box.pack_start(self.home_sync_progress, False, False, 2)
+        self.home_sync_progress.set_show_text(True)
+        card1_box.pack_start(self.home_sync_progress, False, False, 4)
 
         c1_img = self._create_scaled_image(os.path.join(assets_dir, "Selling-point-1.svg"), 95, 95)
         card1_box.pack_start(c1_img, True, True, 2)
@@ -514,8 +514,8 @@ class GoogleDriveHomeWindow:
         title_box.pack_start(self.act_time_lbl, False, False, 0)
 
         self.act_progress = Gtk.ProgressBar()
-        self.act_progress.set_no_show_all(True)
-        title_box.pack_start(self.act_progress, False, False, 2)
+        self.act_progress.set_show_text(True)
+        title_box.pack_start(self.act_progress, False, False, 4)
 
         box.pack_start(title_box, False, False, 0)
 
@@ -594,10 +594,31 @@ class GoogleDriveHomeWindow:
             total_items = stats["total_items"]
             total_files = stats["total_files"]
             total_dirs = stats["total_dirs"]
+            indexed_bytes = stats.get("indexed_bytes", 0)
             pending_ops = stats["pending_ops"]
 
             is_syncing = bool(self.sync_worker and getattr(self.sync_worker, "is_syncing", False))
             is_paused = bool(self.sync_worker and getattr(self.sync_worker, "paused", False))
+            scan_complete = bool(self.sync_worker and getattr(self.sync_worker, "initial_scan_complete", False))
+            drive_total_bytes = getattr(self.sync_worker, "drive_total_bytes", 0) if self.sync_worker else 0
+            if not drive_total_bytes:
+                accs = self.db.get_accounts()
+                if accs:
+                    drive_total_bytes = int(accs[0].get("storage_used", 0))
+
+            if scan_complete and not is_syncing and pending_ops == 0:
+                pct = 100.0
+            elif drive_total_bytes > 0 and indexed_bytes > 0:
+                pct = min(99.9, max(1.0, (indexed_bytes / drive_total_bytes) * 100.0))
+                if not is_syncing and pending_ops == 0 and pct >= 95.0:
+                    pct = 100.0
+            else:
+                pct = 100.0 if (not is_syncing and total_items > 0) else 0.0
+
+            fraction = max(0.0, min(1.0, pct / 100.0))
+            indexed_gb = indexed_bytes / (1024 ** 3)
+            pct_text = f"{pct:.1f}% sincronizado ({indexed_gb:.1f} GB • {total_items} itens)"
+
             phase = getattr(self.sync_worker, "sync_phase", "Sincronizando...") if self.sync_worker else "Aguardando..."
             last_file = getattr(self.sync_worker, "last_synced_file", "") if self.sync_worker else ""
             mount_pt = self.config.get("mount_point", os.path.expanduser("~/GoogleDrive"))
@@ -605,50 +626,48 @@ class GoogleDriveHomeWindow:
 
             # 1. Update Home Card 1 ("Status de sincronização")
             if hasattr(self, "home_sync_subtitle_lbl"):
+                self.home_sync_progress.set_fraction(fraction)
+                self.home_sync_progress.set_text(pct_text)
+                self.home_sync_progress.show()
                 if is_paused:
-                    self.home_sync_subtitle_lbl.set_markup("<b>⏸️ Sincronização pausada</b>")
+                    self.home_sync_subtitle_lbl.set_markup(f"<b>⏸️ Sincronização pausada ({pct:.1f}%)</b>")
                     self.home_sync_desc_lbl.set_text(
                         f"Indexados: {total_files} arquivos e {total_dirs} pastas\n"
                         f"Modo: {sync_mode_label}\n"
                         f"Pasta: {mount_pt}"
                     )
-                    self.home_sync_progress.hide()
                 elif is_syncing or pending_ops > 0:
-                    self.home_sync_subtitle_lbl.set_markup(f"<b>🔄 {GLib.markup_escape_text(phase)}</b>")
+                    self.home_sync_subtitle_lbl.set_markup(f"<b>🔄 {GLib.markup_escape_text(phase)} ({pct:.1f}%)</b>")
                     desc_lines = [
-                        f"Catálogo sincronizado até agora: {total_files} arquivos e {total_dirs} pastas",
+                        f"Progresso: {pct:.1f}% ({total_files} arquivos e {total_dirs} pastas)",
                     ]
                     if last_file:
                         desc_lines.append(f"Sincronizando: {last_file[:42]}")
                     desc_lines.append(f"Pasta ativa: {mount_pt}")
                     self.home_sync_desc_lbl.set_text("\n".join(desc_lines))
-                    self.home_sync_progress.show()
-                    self.home_sync_progress.pulse()
                 else:
-                    self.home_sync_subtitle_lbl.set_markup("<b>✅ Catálogo sincronizado e atualizado</b>")
+                    self.home_sync_subtitle_lbl.set_markup("<b>✅ Catálogo 100% sincronizado e atualizado</b>")
                     self.home_sync_desc_lbl.set_text(
-                        f"Total disponível: {total_files} arquivos e {total_dirs} pastas\n"
+                        f"Total disponível: {total_files} arquivos e {total_dirs} pastas ({indexed_gb:.1f} GB)\n"
                         f"Modo: {sync_mode_label}\n"
                         f"Pasta ativa: {mount_pt}"
                     )
-                    self.home_sync_progress.hide()
 
             # 2. Update Activity Tab Header & File List
             if hasattr(self, "act_status_lbl"):
+                self.act_progress.set_fraction(fraction)
+                self.act_progress.set_text(pct_text)
+                self.act_progress.show()
                 if is_paused:
-                    self.act_status_lbl.set_markup("<big><big><b>⏸️ Sincronização pausada</b></big></big>")
-                    self.act_progress.hide()
+                    self.act_status_lbl.set_markup(f"<big><big><b>⏸️ Sincronização pausada ({pct:.1f}%)</b></big></big>")
                 elif is_syncing or pending_ops > 0:
                     self.act_status_lbl.set_markup(
-                        f"<big><big><b>🔄 {GLib.markup_escape_text(phase)}</b></big></big>"
+                        f"<big><big><b>🔄 {GLib.markup_escape_text(phase)} ({pct:.1f}%)</b></big></big>"
                     )
-                    self.act_progress.show()
-                    self.act_progress.pulse()
                 else:
                     self.act_status_lbl.set_markup(
-                        f"<big><big><b>☁️ Atualizado ({total_items} itens sincronizados)</b></big></big>"
+                        f"<big><big><b>☁️ 100% Atualizado ({total_items} itens sincronizados)</b></big></big>"
                     )
-                    self.act_progress.hide()
 
                 self.act_time_lbl.set_text(
                     f"{total_files} arquivos • {total_dirs} pastas • Modo: {sync_mode_label} • Pasta: {mount_pt}"

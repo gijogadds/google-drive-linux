@@ -25,6 +25,7 @@ class SyncWorker(threading.Thread):
         self.last_synced_file = ""
         self.session_synced_count = 0
         self.last_sync_timestamp = 0
+        self.drive_total_bytes = 0
         self.resume_page_token: Optional[str] = None
         self.recent_synced_items = []
         self.current_activity = "Sincronizando catálogo..."
@@ -149,6 +150,9 @@ class SyncWorker(threading.Thread):
         quota = about.get("storageQuota", {})
         total = int(quota.get("limit", 0))
         used = int(quota.get("usage", 0))
+        drive_used = int(quota.get("usageInDrive", 0)) or used
+        if drive_used > 0:
+            self.drive_total_bytes = drive_used
         if total > 0 or used > 0:
             with self.db._get_connection() as conn:
                 conn.execute(
