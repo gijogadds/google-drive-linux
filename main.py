@@ -11,8 +11,28 @@ import argparse
 import threading
 import time
 
-# Ensure project root is in python path
+# Ensure project root is in python path and desktop app identity is set before GTK init
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.argv[0] = "google-drive"
+
+try:
+    import gi
+    gi.require_version("Gdk", "3.0")
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import GLib, Gdk, Gtk
+    GLib.set_prgname("google-drive")
+    if GLib.get_application_name() != "Google Drive":
+        GLib.set_application_name("Google Drive")
+    Gdk.set_program_class("google-drive")
+    _icon_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icons", "drive_fs.png")
+    if os.path.exists(_icon_file):
+        try:
+            Gtk.Window.set_default_icon_from_file(_icon_file)
+        except Exception:
+            pass
+    HAS_GLIB = True
+except Exception:
+    HAS_GLIB = False
 
 from core.config import (
     load_config, save_config, ensure_directories, unmount_fuse_path,
@@ -29,22 +49,6 @@ from updater.github_updater import GitHubUpdater
 from ui.indicator import DriveTrayIndicator
 from ui.webview_window import SettingsDialog, GoogleDriveHomeWindow
 from core.diagnostic import install_global_crash_hook
-
-try:
-    import gi
-    gi.require_version("Gtk", "3.0")
-    from gi.repository import GLib, Gtk
-    GLib.set_prgname("google-drive")
-    GLib.set_application_name("Google Drive")
-    _icon_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icons", "drive_fs.png")
-    if os.path.exists(_icon_file):
-        try:
-            Gtk.Window.set_default_icon_from_file(_icon_file)
-        except Exception:
-            pass
-    HAS_GLIB = True
-except Exception:
-    HAS_GLIB = False
 
 
 def send_ipc_command(cmd: str) -> bool:

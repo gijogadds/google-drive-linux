@@ -26,11 +26,16 @@ def run_install_wizard() -> int:
         return 0
 
     try:
+        sys.argv[0] = "google-drive"
         import gi
+        gi.require_version("Gdk", "3.0")
         gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk, GdkPixbuf, GLib
+        from gi.repository import GLib
         GLib.set_prgname("google-drive")
-        GLib.set_application_name("Google Drive")
+        if GLib.get_application_name() != "Google Drive":
+            GLib.set_application_name("Google Drive")
+        from gi.repository import Gtk, Gdk, GdkPixbuf
+        Gdk.set_program_class("google-drive")
     except Exception:
         cfg = load_config()
         save_config(cfg)

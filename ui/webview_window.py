@@ -16,8 +16,14 @@ from typing import Dict, Any, Callable, Optional
 
 try:
     import gi
+    gi.require_version("Gdk", "3.0")
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+    from gi.repository import GLib
+    GLib.set_prgname("google-drive")
+    if GLib.get_application_name() != "Google Drive":
+        GLib.set_application_name("Google Drive")
+    from gi.repository import Gtk, Gdk, GdkPixbuf
+    Gdk.set_program_class("google-drive")
     try:
         try:
             gi.require_version("WebKit2", "4.1")
@@ -55,7 +61,7 @@ class GoogleDriveHomeWindow:
             return
 
         GLib.set_prgname("google-drive")
-        GLib.set_application_name("Google Drive")
+        Gdk.set_program_class("google-drive")
 
         window = Gtk.Window(title="Google Drive")
         window.set_default_size(980, 680)
@@ -962,7 +968,7 @@ class SettingsDialog:
             return
 
         GLib.set_prgname("google-drive")
-        GLib.set_application_name("Google Drive")
+        Gdk.set_program_class("google-drive")
 
         window = Gtk.Window(title="Google Drive - Preferências")
         window.set_default_size(580, 520)
