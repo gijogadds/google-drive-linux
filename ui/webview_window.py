@@ -413,20 +413,28 @@ class GoogleDriveHomeWindow:
         storage_box.pack_start(link_manage, False, False, 0)
 
         if acc.get("account_id"):
-            from core.config import get_account_mount_point
-            acc_mount = get_account_mount_point(self.config, acc.get("account_id", ""), email=acc.get("email", ""))
+            from core.config import get_account_mount_point, get_account_display_name
+            acc_id = acc.get("account_id", "")
+            acc_mount = get_account_mount_point(self.config, acc_id, email=acc.get("email", ""))
+            acc_disp = get_account_display_name(self.config, acc_id, email=acc.get("email", ""))
+            mnt_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             lbl_mnt = Gtk.Label()
-            lbl_mnt.set_markup(f"<small>📁 Pasta montada: <b>{GLib.markup_escape_text(os.path.basename(acc_mount) or acc_mount)}</b></small>")
+            lbl_mnt.set_markup(f"<small>📁 Nautilus: <b>{GLib.markup_escape_text(acc_disp)}</b></small>")
             lbl_mnt.set_tooltip_text(acc_mount)
             lbl_mnt.set_alignment(0, 0.5)
-            storage_box.pack_start(lbl_mnt, False, False, 0)
+            lbl_mnt.set_ellipsize(3)
+            mnt_row.pack_start(lbl_mnt, True, True, 0)
+            btn_edit_mnt = Gtk.Button(label="✏️ Editar nome/pasta")
+            btn_edit_mnt.connect("clicked", lambda _, a=acc: (popover.popdown(), self._on_edit_account_folder(a)))
+            mnt_row.pack_start(btn_edit_mnt, False, False, 0)
+            storage_box.pack_start(mnt_row, False, False, 0)
 
         storage_frame.add(storage_box)
         vbox.pack_start(storage_frame, False, False, 5)
 
         # List additional connected accounts if more than 1 account exists
         if len(accounts) > 1:
-            from core.config import get_account_mount_point
+            from core.config import get_account_mount_point, get_account_display_name
             others_frame = Gtk.Frame(label="Outras contas conectadas (Sincronizando em paralelo)")
             others_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             others_box.set_margin_top(8)
@@ -434,20 +442,25 @@ class GoogleDriveHomeWindow:
             others_box.set_margin_start(10)
             others_box.set_margin_end(10)
             for other_acc in accounts[1:]:
-                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
                 row.pack_start(self._create_avatar_widget(other_acc, size=28), False, False, 0)
                 other_id = other_acc.get("account_id", "")
                 other_email = other_acc.get("email", "")
                 other_mount = get_account_mount_point(self.config, other_id, email=other_email)
+                other_disp = get_account_display_name(self.config, other_id, email=other_email)
                 lbl_o = Gtk.Label()
                 lbl_o.set_markup(
                     f"<b>{GLib.markup_escape_text(other_email)}</b>\n"
-                    f"<small>📁 {GLib.markup_escape_text(os.path.basename(other_mount) or other_mount)}</small>"
+                    f"<small>📁 {GLib.markup_escape_text(other_disp)}</small>"
                 )
                 lbl_o.set_tooltip_text(other_mount)
                 lbl_o.set_alignment(0, 0.5)
                 lbl_o.set_ellipsize(3)
                 row.pack_start(lbl_o, True, True, 0)
+                btn_ed = Gtk.Button(label="✏️")
+                btn_ed.set_tooltip_text("Editar nome exibido no Nautilus e local da pasta")
+                btn_ed.connect("clicked", lambda _, a=other_acc: (popover.popdown(), self._on_edit_account_folder(a)))
+                row.pack_start(btn_ed, False, False, 0)
                 btn_sw = Gtk.Button(label="Usar")
                 btn_sw.connect("clicked", lambda _, aid=other_id: (popover.popdown(), self._on_switch_account(aid)))
                 row.pack_start(btn_sw, False, False, 0)
@@ -1069,16 +1082,20 @@ class GoogleDriveHomeWindow:
                 for acc in accs:
                     aid = acc["account_id"]
                     if aid not in confirmed:
-                        chosen_mount = self._prompt_account_mount_point(acc)
+                        chosen_mount, chosen_name = self._prompt_account_mount_point(acc)
                         confirmed.append(aid)
                         self.config["confirmed_account_mounts"] = confirmed
                         if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
                             self.config["account_mounts"] = {}
+                        if "account_names" not in self.config or not isinstance(self.config.get("account_names"), dict):
+                            self.config["account_names"] = {}
                         self.config["account_mounts"][aid] = chosen_mount
+                        self.config["account_names"][aid] = chosen_name
                         self.config["active_account_id"] = aid
                         save_config(self.config)
                         acc_with_mount = dict(acc)
                         acc_with_mount["mount_point"] = chosen_mount
+                        acc_with_mount["display_name_nautilus"] = chosen_name
                         if self.on_account_connected:
                             self.on_account_connected(acc_with_mount)
                         if self.window:
@@ -1091,75 +1108,165 @@ class GoogleDriveHomeWindow:
             self._checking_mounts = False
         return False
 
-    def _prompt_account_mount_point(self, acc: Dict[str, Any]) -> str:
-        """Open a graphical dialog right after login so the user can confirm or choose the mount folder for the account."""
-        from core.config import suggest_account_mount_point
+    def _on_edit_account_folder(self, acc: Dict[str, Any]):
+        """Allow editing the Nautilus sidebar display name and mount folder of an account at any time."""
+        from core.config import save_config, unmount_fuse_path, get_account_mount_point
+        aid = acc.get("account_id", "")
+        if not aid:
+            return
+        old_mount = get_account_mount_point(self.config, aid, email=acc.get("email", ""))
+        chosen_mount, chosen_name = self._prompt_account_mount_point(acc, is_edit=True)
+        if not chosen_mount:
+            return
+        if old_mount and old_mount != chosen_mount:
+            unmount_fuse_path(old_mount, remove_if_empty=True)
+        if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
+            self.config["account_mounts"] = {}
+        if "account_names" not in self.config or not isinstance(self.config.get("account_names"), dict):
+            self.config["account_names"] = {}
+        self.config["account_mounts"][aid] = chosen_mount
+        self.config["account_names"][aid] = chosen_name
+        primary_id = list(self.auth.accounts.keys())[0] if (self.auth and self.auth.accounts) else ""
+        if aid == primary_id:
+            self.config["mount_point"] = chosen_mount
+        save_config(self.config)
+        acc_updated = dict(acc)
+        acc_updated["mount_point"] = chosen_mount
+        acc_updated["display_name_nautilus"] = chosen_name
+        if self.on_account_connected:
+            self.on_account_connected(acc_updated)
+        if self.window:
+            self.window.destroy()
+        self.show()
+
+    def _prompt_account_mount_point(self, acc: Dict[str, Any], is_edit: bool = False):
+        """Open a graphical dialog so the user can choose both the Nautilus sidebar name and the folder location."""
+        from core.config import suggest_account_mount_point, get_account_mount_point, get_account_display_name
+        aid = acc.get("account_id", "")
         email = acc.get("email", "")
-        prefix = email.split("@")[0] if email else "Conta"
-        folder_basename = f"GoogleDrive - {prefix}"
-        suggested = suggest_account_mount_point(self.config, email=email, is_primary=False)
+        primary_id = list(self.auth.accounts.keys())[0] if (self.auth and self.auth.accounts) else ""
+        is_primary = (aid == primary_id)
+
+        if is_edit and aid:
+            current_mount = get_account_mount_point(self.config, aid, email=email, is_primary=is_primary)
+            default_name = get_account_display_name(self.config, aid, email=email, is_primary=is_primary)
+            default_parent = os.path.dirname(current_mount.rstrip("/")) or os.path.expanduser("~")
+        else:
+            suggested = suggest_account_mount_point(self.config, email=email, is_primary=is_primary)
+            default_name = os.path.basename(suggested.rstrip("/")) or "GoogleDrive"
+            default_parent = os.path.dirname(suggested.rstrip("/")) or os.path.expanduser("~")
 
         dlg = Gtk.Dialog(
-            title=f"Pasta do Google Drive — {email}",
+            title=f"Configurar Nome e Pasta no Nautilus — {email}",
             transient_for=self.window,
             flags=0
         )
-        dlg.add_buttons(
-            "Confirmar e Criar Pasta na Lateral", Gtk.ResponseType.OK
-        )
-        dlg.set_default_size(540, 230)
+        if is_edit:
+            dlg.add_buttons(
+                "Cancelar", Gtk.ResponseType.CANCEL,
+                "Salvar e Atualizar no Nautilus", Gtk.ResponseType.OK
+            )
+        else:
+            dlg.add_buttons(
+                "Confirmar e Criar Pasta na Lateral", Gtk.ResponseType.OK
+            )
+        dlg.set_default_size(560, 290)
         area = dlg.get_content_area()
-        area.set_spacing(12)
-        area.set_margin_top(18)
-        area.set_margin_bottom(18)
+        area.set_spacing(10)
+        area.set_margin_top(16)
+        area.set_margin_bottom(16)
         area.set_margin_start(20)
         area.set_margin_end(20)
 
+        # Header with Google Drive Logo + Title
+        hdr_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        logo_svg = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", "drive_logo_24px.svg")
+        if os.path.exists(logo_svg):
+            hdr_box.pack_start(self._create_scaled_image(logo_svg, 36, 36), False, False, 0)
+
         lbl_head = Gtk.Label()
         lbl_head.set_markup(
-            f"<big><b>Conta conectada: {GLib.markup_escape_text(email)}</b></big>\n"
-            "Escolha em qual local deseja adicionar e montar a pasta desta conta.\n"
-            "<small>Ela ficará visível na barra lateral do Gerenciador de Arquivos (Nautilus) simultaneamente com suas outras contas.</small>"
+            f"<big><b>Conta: {GLib.markup_escape_text(email)}</b></big>\n"
+            "<small>Defina o <b>nome que aparecerá na lateral esquerda do Nautilus</b> (com o logo do Google Drive) "
+            "e o diretório onde a pasta ficará localizada:</small>"
         )
         lbl_head.set_line_wrap(True)
         lbl_head.set_alignment(0, 0)
-        area.pack_start(lbl_head, False, False, 0)
+        hdr_box.pack_start(lbl_head, True, True, 0)
+        area.pack_start(hdr_box, False, False, 0)
+
+        # Field 1: Custom Name in Nautilus Sidebar
+        lbl_name = Gtk.Label()
+        lbl_name.set_markup("<b>Nome exibido na lateral do Nautilus:</b>")
+        lbl_name.set_alignment(0, 0.5)
+        area.pack_start(lbl_name, False, False, 0)
+
+        name_entry = Gtk.Entry()
+        name_entry.set_text(default_name)
+        name_entry.set_placeholder_text("Ex: Google Drive - Pessoal ou Google Drive - Loja")
+        area.pack_start(name_entry, False, False, 0)
+
+        # Field 2: Parent Directory Location
+        lbl_loc = Gtk.Label()
+        lbl_loc.set_markup("<b>Local onde a pasta será montada (Diretório pai):</b>")
+        lbl_loc.set_alignment(0, 0.5)
+        area.pack_start(lbl_loc, False, False, 0)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        entry = Gtk.Entry()
-        entry.set_text(suggested)
-        entry.set_hexpand(True)
-        row.pack_start(entry, True, True, 0)
+        parent_entry = Gtk.Entry()
+        parent_entry.set_text(default_parent)
+        parent_entry.set_hexpand(True)
+        row.pack_start(parent_entry, True, True, 0)
+
+        lbl_preview = Gtk.Label()
+        lbl_preview.set_alignment(0, 0.5)
+
+        def _update_preview(*_args):
+            cname = name_entry.get_text().strip().replace("/", "-") or default_name
+            cparent = parent_entry.get_text().strip().rstrip("/") or default_parent
+            full_path = os.path.join(cparent, cname)
+            lbl_preview.set_markup(
+                f"<small>📍 Caminho final: <b>{GLib.markup_escape_text(full_path)}</b></small>"
+            )
+
+        name_entry.connect("changed", _update_preview)
+        parent_entry.connect("changed", _update_preview)
+        _update_preview()
 
         def _browse(_btn):
             chooser = Gtk.FileChooserDialog(
-                title=f"Selecionar local para a pasta de {email}",
+                title=f"Selecionar diretório pai para {email}",
                 transient_for=dlg,
                 action=Gtk.FileChooserAction.SELECT_FOLDER
             )
             chooser.add_buttons(
                 "Cancelar", Gtk.ResponseType.CANCEL,
-                "Selecionar Aqui", Gtk.ResponseType.OK
+                "Selecionar Esta Pasta", Gtk.ResponseType.OK
             )
+            cur_p = parent_entry.get_text().strip()
+            if cur_p and os.path.isdir(cur_p):
+                chooser.set_current_folder(cur_p)
             if chooser.run() == Gtk.ResponseType.OK:
                 folder = chooser.get_filename()
                 if folder:
-                    base = os.path.basename(folder.rstrip("/")).lower()
-                    if not base.startswith("googledrive"):
-                        folder = os.path.join(folder, folder_basename)
-                    entry.set_text(folder)
+                    parent_entry.set_text(folder)
             chooser.destroy()
 
         btn_browse = Gtk.Button(label="Escolher outra pasta...")
         btn_browse.connect("clicked", _browse)
         row.pack_start(btn_browse, False, False, 0)
         area.pack_start(row, False, False, 0)
+        area.pack_start(lbl_preview, False, False, 2)
 
         dlg.show_all()
-        dlg.run()
-        chosen = entry.get_text().strip() or suggested
+        resp = dlg.run()
+        chosen_name = name_entry.get_text().strip().replace("/", "-") or default_name
+        chosen_parent = parent_entry.get_text().strip().rstrip("/") or default_parent
         dlg.destroy()
-        return chosen
+        if is_edit and resp != Gtk.ResponseType.OK:
+            return None, None
+        chosen_mount = os.path.join(chosen_parent, chosen_name)
+        return chosen_mount, chosen_name
 
     def _on_switch_account(self, account_id: str):
         if not account_id:
@@ -1263,10 +1370,13 @@ class GoogleDriveHomeWindow:
                 if acc:
                     from core.config import save_config
                     aid = acc.get("account_id", "")
-                    chosen_mount = self._prompt_account_mount_point(acc)
+                    chosen_mount, chosen_name = self._prompt_account_mount_point(acc)
                     if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
                         self.config["account_mounts"] = {}
+                    if "account_names" not in self.config or not isinstance(self.config.get("account_names"), dict):
+                        self.config["account_names"] = {}
                     self.config["account_mounts"][aid] = chosen_mount
+                    self.config["account_names"][aid] = chosen_name
                     self.config["active_account_id"] = aid
                     confirmed = list(self.config.get("confirmed_account_mounts") or [])
                     if aid and aid not in confirmed:
@@ -1274,6 +1384,7 @@ class GoogleDriveHomeWindow:
                     self.config["confirmed_account_mounts"] = confirmed
                     save_config(self.config)
                     acc["mount_point"] = chosen_mount
+                    acc["display_name_nautilus"] = chosen_name
                     if self.on_account_connected:
                         self.on_account_connected(acc)
                     if self.window:
@@ -1381,20 +1492,61 @@ class SettingsDialog:
         title_label.set_alignment(0, 0.5)
         vbox.pack_start(title_label, False, False, 0)
 
-        # Accounts Box
-        acc_frame = Gtk.Frame(label="Contas Conectadas")
+        # Accounts Box (with editable Nautilus sidebar name & folder per account)
+        acc_frame = Gtk.Frame(label="Contas Conectadas e Nome na Lateral do Nautilus")
         acc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         acc_box.set_margin_top(10)
         acc_box.set_margin_start(10)
         acc_box.set_margin_end(10)
         acc_box.set_margin_bottom(10)
 
+        from core.config import get_account_mount_point, get_account_display_name
         accounts = self.auth_manager.accounts if self.auth_manager else {}
+        account_rows_controls = {}
+        primary_id = list(accounts.keys())[0] if accounts else ""
+
         if accounts:
             for acc_id, acc_info in accounts.items():
-                lbl = Gtk.Label(label=f"✓ {acc_info.get('email')} ({acc_info.get('display_name', '')})")
+                is_prim = (acc_id == primary_id)
+                email = acc_info.get("email", "")
+                cur_mount = get_account_mount_point(self.config, acc_id, email=email, is_primary=is_prim)
+                cur_name = get_account_display_name(self.config, acc_id, email=email, is_primary=is_prim)
+                cur_parent = os.path.dirname(cur_mount.rstrip("/")) or os.path.expanduser("~")
+
+                acc_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+                lbl = Gtk.Label()
+                lbl.set_markup(f"<b>✓ {GLib.markup_escape_text(email)}</b> ({GLib.markup_escape_text(acc_info.get('display_name', ''))})")
                 lbl.set_alignment(0, 0.5)
-                acc_box.pack_start(lbl, False, False, 0)
+                acc_card.pack_start(lbl, False, False, 0)
+
+                r_name = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                l_n = Gtk.Label(label="Nome no Nautilus:")
+                l_n.set_size_request(140, -1)
+                l_n.set_alignment(0, 0.5)
+                e_name = Gtk.Entry()
+                e_name.set_text(cur_name)
+                e_name.set_hexpand(True)
+                r_name.pack_start(l_n, False, False, 0)
+                r_name.pack_start(e_name, True, True, 0)
+                acc_card.pack_start(r_name, False, False, 0)
+
+                r_dir = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                l_d = Gtk.Label(label="Local da pasta:")
+                l_d.set_size_request(140, -1)
+                l_d.set_alignment(0, 0.5)
+                e_dir = Gtk.Entry()
+                e_dir.set_text(cur_parent)
+                e_dir.set_hexpand(True)
+                b_dir = Gtk.Button(label="Procurar...")
+                b_dir.connect("clicked", lambda _, ent=e_dir: _choose_folder(window, ent, is_mount_point=False))
+                r_dir.pack_start(l_d, False, False, 0)
+                r_dir.pack_start(e_dir, True, True, 0)
+                r_dir.pack_start(b_dir, False, False, 0)
+                acc_card.pack_start(r_dir, False, False, 0)
+
+                acc_box.pack_start(acc_card, False, False, 2)
+                acc_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
+                account_rows_controls[acc_id] = (e_name, e_dir, cur_name, cur_parent, is_prim)
         else:
             lbl = Gtk.Label(label="Nenhuma conta conectada.")
             lbl.set_alignment(0, 0.5)
@@ -1506,6 +1658,23 @@ class SettingsDialog:
             updated_config["mount_point"] = path_entry.get_text().strip() or os.path.expanduser("~/GoogleDrive")
             updated_config["cache_dir"] = cache_entry.get_text().strip() or os.path.expanduser("~/.cache/google-drive-linux")
             updated_config["autostart"] = autostart_cb.get_active()
+
+            if "account_mounts" not in updated_config or not isinstance(updated_config.get("account_mounts"), dict):
+                updated_config["account_mounts"] = {}
+            if "account_names" not in updated_config or not isinstance(updated_config.get("account_names"), dict):
+                updated_config["account_names"] = {}
+
+            for acc_id, (e_name, e_dir, def_name, def_dir, is_prim) in account_rows_controls.items():
+                new_n = e_name.get_text().strip().replace("/", "-") or def_name
+                new_d = e_dir.get_text().strip().rstrip("/") or def_dir
+                full_mp = os.path.join(new_d, new_n)
+                updated_config["account_names"][acc_id] = new_n
+                updated_config["account_mounts"][acc_id] = full_mp
+                ensure_apparmor_allows_mount(full_mp)
+                if is_prim:
+                    updated_config["mount_point"] = full_mp
+                    path_entry.set_text(full_mp)
+
             ensure_apparmor_allows_mount(updated_config["mount_point"])
             try:
                 action = "enable" if updated_config["autostart"] else "disable"

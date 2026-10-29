@@ -46,6 +46,89 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+def ensure_nautilus_mount_icons(config: Dict[str, Any]) -> bool:
+    """Install the Google Drive logo icon for Nautilus sidebar mounts and configure x-gvfs mount icon options."""
+    import shutil
+    import urllib.parse
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    logo_svg = os.path.join(project_root, "assets", "icons", "drive_logo_24px.svg")
+    logo_png = os.path.join(project_root, "assets", "icons", "drive_fs.png")
+
+    # 1. Install google-drive and google-drive-symbolic into user icon themes so GTK4/Nautilus renders the colorful Drive logo
+    for theme_name in ("hicolor", "Yaru", "Yaru-dark", "Adwaita"):
+        for sub in ("scalable/apps", "scalable/devices", "symbolic/apps", "symbolic/devices"):
+            dest_dir = os.path.expanduser(f"~/.local/share/icons/{theme_name}/{sub}")
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                if os.path.exists(logo_svg):
+                    shutil.copy2(logo_svg, os.path.join(dest_dir, "google-drive.svg"))
+                    shutil.copy2(logo_svg, os.path.join(dest_dir, "google-drive-symbolic.svg"))
+            except Exception:
+                pass
+        if os.path.exists(logo_png):
+            png_dir = os.path.expanduser(f"~/.local/share/icons/{theme_name}/256x256/apps")
+            try:
+                os.makedirs(png_dir, exist_ok=True)
+                shutil.copy2(logo_png, os.path.join(png_dir, "google-drive.png"))
+                shutil.copy2(logo_png, os.path.join(png_dir, "google-drive-symbolic.png"))
+            except Exception:
+                pass
+
+    # 2. Ensure /etc/fstab has noauto,user,x-gvfs-show,x-gvfs-icon=google-drive,x-gvfs-symbolic-icon=google-drive-symbolic
+    #    for each configured account mount point so gvfs-udisks2-volume-monitor gives Nautilus the Google Drive logo!
+    mounts = dict(config.get("account_mounts") or {})
+    primary_mp = config.get("mount_point") or DEFAULT_MOUNT_POINT
+    if primary_mp and primary_mp not in mounts.values():
+        mounts["primary"] = primary_mp
+
+    names = dict(config.get("account_names") or {})
+    desired_lines = []
+    for acc_id, mp in mounts.items():
+        if not mp:
+            continue
+        mp_clean = mp.rstrip("/")
+        escaped_mp = mp_clean.replace(" ", "\\040")
+        display_name = names.get(acc_id) or os.path.basename(mp_clean) or "Google Drive"
+        encoded_name = urllib.parse.quote(display_name, safe="")
+        opts = (
+            f"noauto,user,x-gvfs-show,x-gvfs-name={encoded_name},"
+            f"x-gvfs-icon=google-drive,x-gvfs-symbolic-icon=google-drive-symbolic"
+        )
+        desired_lines.append(f"GoogleDriveFUSE {escaped_mp} fuse.GoogleDriveFUSE {opts} 0 0 # google-drive-linux")
+
+    fstab_path = "/etc/fstab"
+    if not os.path.exists(fstab_path):
+        return True
+
+    try:
+        with open(fstab_path, "r", encoding="utf-8") as f:
+            existing_content = f.read()
+        existing_lines = [ln for ln in existing_content.splitlines() if "# google-drive-linux" not in ln and "fuse.GoogleDriveFUSE" not in ln]
+        current_gdf_lines = [ln.strip() for ln in existing_content.splitlines() if "# google-drive-linux" in ln]
+        if sorted(current_gdf_lines) == sorted(desired_lines):
+            return True
+
+        new_content = "\n".join(existing_lines).rstrip() + "\n"
+        if desired_lines:
+            new_content += "\n".join(desired_lines) + "\n"
+
+        tmp_fstab = os.path.join(CACHE_DIR, "fstab.gdrive.tmp")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(tmp_fstab, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        if os.geteuid() == 0:
+            shutil.copy2(tmp_fstab, fstab_path)
+            return True
+        elif os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+            res = subprocess.run(["pkexec", "cp", tmp_fstab, fstab_path], capture_output=True)
+            return res.returncode == 0
+    except Exception as e:
+        print(f"[Config] Aviso ao atualizar ícones do Nautilus em /etc/fstab: {e}")
+    return False
+
+
 def ensure_apparmor_allows_mount(mount_point: str) -> bool:
     """Ensure Ubuntu 24.04/26.04+ AppArmor fusermount3 profile allows FUSE mounts under /run/media/."""
     if not mount_point or not mount_point.startswith("/run/media/"):
@@ -184,14 +267,26 @@ def save_config(config: Dict[str, Any]):
         json.dump(config, f, indent=2)
 
 
-def suggest_account_mount_point(config: Dict[str, Any], email: str = "", is_primary: bool = False) -> str:
+def suggest_account_mount_point(config: Dict[str, Any], email: str = "", is_primary: bool = False, custom_name: str = "") -> str:
     """Return a suggested mount point for an account (e.g., '<parent>/GoogleDrive - <prefix>' for secondary accounts)."""
     primary_mount = config.get("mount_point", DEFAULT_MOUNT_POINT).rstrip("/")
+    parent_dir = os.path.dirname(primary_mount) or os.path.expanduser("~")
+    if custom_name and custom_name.strip():
+        safe_name = custom_name.strip().replace("/", "-")
+        return os.path.join(parent_dir, safe_name)
     if is_primary or not email:
         return primary_mount
     prefix = email.split("@")[0].strip()
-    parent_dir = os.path.dirname(primary_mount) or os.path.expanduser("~")
     return os.path.join(parent_dir, f"GoogleDrive - {prefix}")
+
+
+def get_account_display_name(config: Dict[str, Any], account_id: str, email: str = "", is_primary: bool = False) -> str:
+    """Return the custom sidebar display name for an account, or derive it from its mount folder."""
+    names = config.get("account_names") or {}
+    if account_id and account_id in names and names[account_id]:
+        return names[account_id]
+    mp = get_account_mount_point(config, account_id, email=email, is_primary=is_primary)
+    return os.path.basename(mp.rstrip("/")) or "GoogleDrive"
 
 
 def get_account_mount_point(config: Dict[str, Any], account_id: str, email: str = "", is_primary: bool = False) -> str:

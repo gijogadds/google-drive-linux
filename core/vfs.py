@@ -44,19 +44,49 @@ except (ImportError, OSError, EnvironmentError):
 
 
 class GoogleDriveFUSE(Operations):
-    def __init__(self, db, cache_manager, api, account_id: str):
+    def __init__(self, db, cache_manager, api, account_id: str, volume_name: str = "GoogleDrive"):
         self.db = db
         self.cache = cache_manager
         self.api = api
         self.account_id = account_id
+        self.volume_name = volume_name or "GoogleDrive"
         self.open_files: Dict[int, Dict[str, Any]] = {}
         self.fh_counter = 1
         self._hydrated_dirs = set()
+        self._icon_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets", "icons", "drive_fs.png"
+        )
+
+    def _get_virtual_volume_file(self, path: str) -> Optional[bytes]:
+        if path == "/.xdg-volume-info":
+            return (
+                f"[Volume Info]\n"
+                f"Name={self.volume_name}\n"
+                f"IconFile=.volume-icon.png\n"
+            ).encode("utf-8")
+        if path == "/.volume-icon.png" and os.path.exists(self._icon_path):
+            try:
+                with open(self._icon_path, "rb") as f:
+                    return f.read()
+            except Exception:
+                return None
+        return None
 
     def _resolve_item(self, path: str) -> Optional[Dict[str, Any]]:
         """Resolve a POSIX path (e.g. /Folder/Subfolder/file.pdf) to an item record in SQLite."""
         if path in ("/", ""):
             return {"id": "root", "name": "root", "is_directory": 1, "size": 0, "modified_time": int(time.time())}
+        vdata = self._get_virtual_volume_file(path)
+        if vdata is not None:
+            return {
+                "id": f"__virtual__{path}",
+                "name": os.path.basename(path),
+                "is_directory": 0,
+                "size": len(vdata),
+                "modified_time": int(time.time()),
+                "_virtual_bytes": vdata,
+            }
 
         parts = [p for p in path.strip("/").split("/") if p]
         current_parent = "root"
@@ -197,6 +227,10 @@ class GoogleDriveFUSE(Operations):
 
         if not item:
             raise FuseOSError(errno.ENOENT)
+
+        if "_virtual_bytes" in item:
+            vdata = item["_virtual_bytes"]
+            return vdata[offset:offset + size]
 
         mime = item.get("mime_type", "")
         # Google Docs synthetic .desktop launcher content (Standalone App Window mode)
@@ -390,7 +424,7 @@ def _sync_gtk_bookmark(mount_point: str, enable_bookmark: bool):
         pass
 
 
-def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False):
+def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False, volume_name: str = ""):
     """Mount the Google Drive FUSE filesystem on Ubuntu (with automatic fallback for AppArmor /run/media)."""
     import subprocess
     fallback_mount = os.path.expanduser(f"~/.cache/google-drive-linux/fuse_mnt_{account_id}")
@@ -406,8 +440,9 @@ def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foregr
             pass
 
     os.makedirs(mount_point, exist_ok=True)
-    fs = GoogleDriveFUSE(db, cache_manager, api, account_id)
-    print(f"[VFS] Montando Google Drive em: {mount_point}")
+    vol_label = volume_name or os.path.basename(mount_point.rstrip("/")) or "GoogleDrive"
+    fs = GoogleDriveFUSE(db, cache_manager, api, account_id, volume_name=vol_label)
+    print(f"[VFS] Montando Google Drive ({vol_label}) em: {mount_point}")
     try:
         if FUSE is not None:
             _sync_gtk_bookmark(mount_point, enable_bookmark=False)

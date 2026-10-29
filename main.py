@@ -36,7 +36,8 @@ except Exception:
 
 from core.config import (
     load_config, save_config, ensure_directories, unmount_fuse_path,
-    ensure_apparmor_allows_mount, get_account_mount_point,
+    ensure_apparmor_allows_mount, ensure_nautilus_mount_icons,
+    get_account_mount_point, get_account_display_name,
     DEFAULT_MOUNT_POINT, IPC_SOCKET_PATH
 )
 from core.db import MetadataDB
@@ -104,6 +105,7 @@ class GoogleDriveDaemon:
                 unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
 
         ensure_apparmor_allows_mount(mount_pt)
+        ensure_nautilus_mount_icons(self.config)
         try:
             if os.path.islink(mount_pt):
                 os.unlink(mount_pt)
@@ -113,10 +115,11 @@ class GoogleDriveDaemon:
             print(f"[Aviso] {msg}")
             return False, msg
 
+        vol_name = get_account_display_name(self.config, account_id)
         fuse_thread = threading.Thread(
             target=mount_fuse,
             args=(mount_pt, self.db, cache, api, account_id),
-            kwargs={"foreground": True},
+            kwargs={"foreground": True, "volume_name": vol_name},
             daemon=True,
             name=f"FUSEThread-{account_id[:6]}"
         )
@@ -353,11 +356,8 @@ class GoogleDriveDaemon:
         old_mount = self.active_mount_point or self.config.get("mount_point", DEFAULT_MOUNT_POINT)
         new_mount = new_config.get("mount_point", DEFAULT_MOUNT_POINT)
         self.config = dict(new_config)
-        if self.account_id:
-            if "account_mounts" not in self.config or not isinstance(self.config.get("account_mounts"), dict):
-                self.config["account_mounts"] = {}
-            self.config["account_mounts"][self.account_id] = new_mount
         save_config(self.config)
+        ensure_nautilus_mount_icons(self.config)
 
         if self.home_window:
             self.home_window.config = self.config
@@ -367,10 +367,28 @@ class GoogleDriveDaemon:
         if self.settings_dialog:
             self.settings_dialog.config = self.config
 
-        if new_mount != old_mount or not os.path.exists(new_mount):
+        # Apply any renamed/relocated account mounts immediately
+        new_account_mounts = self.config.get("account_mounts") or {}
+        remounted_any = False
+        last_msg = ""
+        for acc_id, target_mp in list(new_account_mounts.items()):
+            if acc_id in self.account_runtimes and target_mp:
+                rt = self.account_runtimes[acc_id]
+                cur_mp = rt.get("mount_point")
+                if cur_mp != target_mp or not os.path.exists(target_mp):
+                    ok, msg = self._mount_vfs_for_account(acc_id, target_mp, rt["api"], rt["cache"])
+                    remounted_any = True
+                    last_msg = msg
+                    if not ok:
+                        return ok, msg
+
+        if not remounted_any and (new_mount != old_mount or not os.path.exists(new_mount)):
             ok, msg = self._mount_vfs_at(new_mount)
             print(f"[Config] {msg}")
             return ok, msg
+
+        if remounted_any:
+            return True, last_msg
 
         print("[Config] Novas configurações aplicadas com sucesso.")
         return True, f"Configurações salvas e aplicadas com sucesso!\n\nPasta do Google Drive ativa em:\n{new_mount}"
