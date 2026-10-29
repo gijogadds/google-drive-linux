@@ -236,6 +236,59 @@ class MetadataDB:
                 "pending_ops": pending_ops,
             }
 
+    def get_relative_path(self, item_id: str) -> str:
+        """Reconstruct the relative path of an item inside its account mount (e.g. 'Pasta/Subpasta/arquivo.pdf')."""
+        parts = []
+        visited = set()
+        curr_id = item_id
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            while curr_id and curr_id != "root" and curr_id not in visited and len(parts) < 30:
+                visited.add(curr_id)
+                cursor.execute("SELECT name, parent_id, is_directory, mime_type FROM items WHERE id = ?", (curr_id,))
+                row = cursor.fetchone()
+                if not row:
+                    break
+                name = row["name"]
+                if not parts:
+                    mime = row["mime_type"] or ""
+                    if not row["is_directory"] and mime.startswith("application/vnd.google-apps.") and not name.endswith(".desktop"):
+                        name = f"{name}.desktop"
+                parts.append(name)
+                curr_id = row["parent_id"]
+        parts.reverse()
+        return "/".join(parts)
+
+    def search_items(self, query: str, limit: int = 80, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Search local metadata catalog by name (across active or all connected accounts) and include relative path."""
+        q_clean = (query or "").strip()
+        if not q_clean:
+            return []
+        like_pat = f"%{q_clean}%"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if account_id:
+                cursor.execute("""
+                    SELECT id, account_id, name, parent_id, mime_type, is_directory, size, sync_status, modified_time
+                    FROM items
+                    WHERE is_trashed = 0 AND account_id = ? AND name LIKE ?
+                    ORDER BY is_directory DESC, modified_time DESC, name ASC
+                    LIMIT ?
+                """, (account_id, like_pat, limit))
+            else:
+                cursor.execute("""
+                    SELECT id, account_id, name, parent_id, mime_type, is_directory, size, sync_status, modified_time
+                    FROM items
+                    WHERE is_trashed = 0 AND name LIKE ?
+                    ORDER BY is_directory DESC, modified_time DESC, name ASC
+                    LIMIT ?
+                """, (like_pat, limit))
+            rows = [dict(r) for r in cursor.fetchall()]
+
+        for r in rows:
+            r["relative_path"] = self.get_relative_path(r["id"])
+        return rows
+
     def get_recent_items(self, limit: int = 50, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()

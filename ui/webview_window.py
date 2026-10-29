@@ -125,12 +125,13 @@ class GoogleDriveHomeWindow:
         logo_box.pack_start(logo_label, False, False, 0)
         header.pack_start(logo_box, False, False, 0)
 
-        # Search Bar
-        search_entry = Gtk.SearchEntry()
-        search_entry.set_placeholder_text("Pesquisar no Google Drive")
-        search_entry.set_hexpand(True)
-        search_entry.connect("activate", lambda e: self._on_search(e.get_text()))
-        header.pack_start(search_entry, True, True, 20)
+        # Search Bar (in-app dual search: Local Computer & Google Drive Web)
+        self.search_entry = Gtk.SearchEntry()
+        self.search_entry.set_placeholder_text("Pesquisar no Computador e no Google Drive...")
+        self.search_entry.set_hexpand(True)
+        self.search_entry.connect("activate", lambda e: self._on_search(e.get_text()))
+        self.search_entry.connect("search-changed", self._on_search_changed)
+        header.pack_start(self.search_entry, True, True, 20)
 
         # Pause Button (⏸️)
         btn_pause = Gtk.Button(label="⏸️")
@@ -214,6 +215,10 @@ class GoogleDriveHomeWindow:
         # --- PÁGINA 3: NOTIFICAÇÕES (Imagem 4) ---
         page_notifications = self._create_page_notifications(assets_dir)
         self.stack.add_named(page_notifications, "notifications")
+
+        # --- PÁGINA 4: RESULTADOS DA PESQUISA (No Computador + No Google Drive) ---
+        page_search = self._create_page_search()
+        self.stack.add_named(page_search, "search")
 
         body.pack_start(self.stack, True, True, 0)
 
@@ -955,9 +960,327 @@ class GoogleDriveHomeWindow:
                 self.sync_worker.pause()
                 btn.set_label("▶️")
 
-    def _on_search(self, query):
-        if query:
-            webbrowser.open(f"https://drive.google.com/drive/search?q={query}")
+    def _create_page_search(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(20)
+        box.set_margin_bottom(20)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+
+        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.search_title_lbl = Gtk.Label()
+        self.search_title_lbl.set_markup("<big><big><b>Resultados da Pesquisa</b></big></big>")
+        self.search_title_lbl.set_alignment(0, 0.5)
+        top_bar.pack_start(self.search_title_lbl, True, True, 0)
+
+        btn_web_all = Gtk.Button(label="🌐 Ver pesquisa completa no Navegador")
+        btn_web_all.connect("clicked", lambda _: self._open_search_in_browser())
+        top_bar.pack_start(btn_web_all, False, False, 0)
+
+        btn_back = Gtk.Button(label="✕ Fechar Pesquisa")
+        btn_back.connect("clicked", lambda _: (self.search_entry.set_text(""), self.stack.set_visible_child_name("home")))
+        top_bar.pack_start(btn_back, False, False, 0)
+        box.pack_start(top_bar, False, False, 0)
+
+        self.search_subtitle_lbl = Gtk.Label(
+            label="Clique em 'Abrir no Computador' para abrir o arquivo local ou em 'Abrir no Google Drive' para abrir no Chrome."
+        )
+        self.search_subtitle_lbl.set_alignment(0, 0.5)
+        self.search_subtitle_lbl.set_opacity(0.78)
+        box.pack_start(self.search_subtitle_lbl, False, False, 0)
+
+        # Dual Paned / Split View:
+        # Left/Top: "💻 No Computador (Pasta Local)" | Right/Bottom: "☁️ No Google Drive (Nuvem / Web)"
+        grid = Gtk.Grid()
+        grid.set_column_spacing(16)
+        grid.set_row_spacing(10)
+        grid.set_column_homogeneous(True)
+        grid.set_vexpand(True)
+        grid.set_hexpand(True)
+
+        # Column 1: No Computador
+        frame_local = Gtk.Frame()
+        vbox_local = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        vbox_local.set_margin_top(10)
+        vbox_local.set_margin_bottom(10)
+        vbox_local.set_margin_start(12)
+        vbox_local.set_margin_end(12)
+
+        self.lbl_search_local_hdr = Gtk.Label()
+        self.lbl_search_local_hdr.set_markup("<b>💻 Onde está no Computador (Pasta Montada)</b>")
+        self.lbl_search_local_hdr.set_alignment(0, 0.5)
+        vbox_local.pack_start(self.lbl_search_local_hdr, False, False, 0)
+        vbox_local.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+
+        scroll_local = Gtk.ScrolledWindow()
+        scroll_local.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll_local.set_vexpand(True)
+        self.search_local_list = Gtk.ListBox()
+        self.search_local_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        scroll_local.add(self.search_local_list)
+        vbox_local.pack_start(scroll_local, True, True, 0)
+        frame_local.add(vbox_local)
+        grid.attach(frame_local, 0, 0, 1, 1)
+
+        # Column 2: No Google Drive (Web)
+        frame_cloud = Gtk.Frame()
+        vbox_cloud = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        vbox_cloud.set_margin_top(10)
+        vbox_cloud.set_margin_bottom(10)
+        vbox_cloud.set_margin_start(12)
+        vbox_cloud.set_margin_end(12)
+
+        self.lbl_search_cloud_hdr = Gtk.Label()
+        self.lbl_search_cloud_hdr.set_markup("<b>☁️ No Google Drive (Site / Nuvem)</b>")
+        self.lbl_search_cloud_hdr.set_alignment(0, 0.5)
+        vbox_cloud.pack_start(self.lbl_search_cloud_hdr, False, False, 0)
+        vbox_cloud.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+
+        scroll_cloud = Gtk.ScrolledWindow()
+        scroll_cloud.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll_cloud.set_vexpand(True)
+        self.search_cloud_list = Gtk.ListBox()
+        self.search_cloud_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        scroll_cloud.add(self.search_cloud_list)
+        vbox_cloud.pack_start(scroll_cloud, True, True, 0)
+        frame_cloud.add(vbox_cloud)
+        grid.attach(frame_cloud, 1, 0, 1, 1)
+
+        box.pack_start(grid, True, True, 0)
+        return box
+
+    def _open_search_in_browser(self):
+        q = self.search_entry.get_text().strip() if hasattr(self, "search_entry") else ""
+        if q:
+            import urllib.parse
+            webbrowser.open(f"https://drive.google.com/drive/search?q={urllib.parse.quote(q)}")
+        else:
+            webbrowser.open("https://drive.google.com")
+
+    def _on_search_changed(self, entry):
+        q = entry.get_text().strip()
+        if not q:
+            if hasattr(self, "stack") and self.stack.get_visible_child_name() == "search":
+                self.stack.set_visible_child_name("home")
+            return
+        if len(q) >= 2:
+            self._on_search(q, live_typing=True)
+
+    def _open_local_path(self, full_path: str, reveal_folder: bool = False):
+        target = os.path.dirname(full_path) if reveal_folder else full_path
+        if not os.path.exists(target):
+            parent = os.path.dirname(full_path)
+            if os.path.exists(parent):
+                target = parent
+        subprocess.Popen(["xdg-open", target])
+
+    @staticmethod
+    def _build_drive_web_url(item: Dict[str, Any]) -> str:
+        if item.get("webViewLink"):
+            return item["webViewLink"]
+        item_id = item.get("id", "")
+        is_dir = bool(item.get("is_directory")) or item.get("mimeType") == "application/vnd.google-apps.folder" or item.get("mime_type") == "application/vnd.google-apps.folder"
+        mime = item.get("mime_type") or item.get("mimeType") or ""
+        if is_dir:
+            return f"https://drive.google.com/drive/folders/{item_id}"
+        if "document" in mime:
+            return f"https://docs.google.com/document/d/{item_id}/edit"
+        if "spreadsheet" in mime:
+            return f"https://docs.google.com/spreadsheets/d/{item_id}/edit"
+        if "presentation" in mime:
+            return f"https://docs.google.com/presentation/d/{item_id}/edit"
+        return f"https://drive.google.com/file/d/{item_id}/view"
+
+    def _build_search_result_row(self, item: Dict[str, Any], mode: str, acc_map: Dict[str, Dict[str, Any]]):
+        from core.config import get_account_mount_point, get_account_display_name
+        row_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        row_box.set_margin_top(6)
+        row_box.set_margin_bottom(6)
+        row_box.set_margin_start(6)
+        row_box.set_margin_end(6)
+
+        is_dir = bool(item.get("is_directory")) or item.get("mimeType") == "application/vnd.google-apps.folder"
+        icon_prefix = "📁" if is_dir else "📄"
+        name_str = item.get("name", "Sem nome")
+        acc_id = item.get("account_id") or ""
+        acc_info = acc_map.get(acc_id, {})
+        email = acc_info.get("email", "")
+        is_prim = bool(acc_info.get("is_primary", False))
+        mount_pt = get_account_mount_point(self.config, acc_id, email=email, is_primary=is_prim)
+        disp_name = get_account_display_name(self.config, acc_id, email=email, is_primary=is_prim)
+
+        rel_path = item.get("relative_path")
+        if rel_path is None and item.get("id"):
+            rel_path = self.db.get_relative_path(item["id"])
+        rel_path = rel_path or name_str
+        full_local_path = os.path.join(mount_pt, rel_path) if rel_path else mount_pt
+        web_url = self._build_drive_web_url(item)
+
+        top_line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_name = Gtk.Label()
+        lbl_name.set_markup(f"<b>{icon_prefix}  {GLib.markup_escape_text(name_str)}</b>")
+        lbl_name.set_alignment(0, 0.5)
+        lbl_name.set_ellipsize(3)
+        top_line.pack_start(lbl_name, True, True, 0)
+
+        size_val = int(item.get("size") or 0)
+        lbl_sz = Gtk.Label(label=self._format_size(size_val, is_dir))
+        lbl_sz.set_opacity(0.75)
+        top_line.pack_start(lbl_sz, False, False, 0)
+        row_box.pack_start(top_line, False, False, 0)
+
+        lbl_loc = Gtk.Label()
+        if mode == "local":
+            lbl_loc.set_markup(
+                f"<small>📍 <b>{GLib.markup_escape_text(disp_name)}:</b> {GLib.markup_escape_text(full_local_path)}</small>"
+            )
+            lbl_loc.set_tooltip_text(full_local_path)
+        else:
+            acc_badge = f"Conta: {email} • " if email else ""
+            lbl_loc.set_markup(
+                f"<small>☁️ {GLib.markup_escape_text(acc_badge)}Local no Drive: /{GLib.markup_escape_text(rel_path)}</small>"
+            )
+            lbl_loc.set_tooltip_text(web_url)
+        lbl_loc.set_alignment(0, 0.5)
+        lbl_loc.set_ellipsize(3)
+        row_box.pack_start(lbl_loc, False, False, 0)
+
+        btn_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        if mode == "local":
+            btn_open_pc = Gtk.Button(label="💻 Abrir no Computador")
+            btn_open_pc.set_tooltip_text(f"Abrir {full_local_path}")
+            btn_open_pc.connect("clicked", lambda _, p=full_local_path: self._open_local_path(p, reveal_folder=False))
+            btn_bar.pack_start(btn_open_pc, False, False, 0)
+
+            if not is_dir:
+                btn_folder = Gtk.Button(label="📂 Abrir Pasta Local")
+                btn_folder.set_tooltip_text(f"Mostrar na pasta {os.path.dirname(full_local_path)}")
+                btn_folder.connect("clicked", lambda _, p=full_local_path: self._open_local_path(p, reveal_folder=True))
+                btn_bar.pack_start(btn_folder, False, False, 0)
+
+            btn_open_web = Gtk.Button(label="🌐 Abrir no Chrome")
+            btn_open_web.set_tooltip_text(web_url)
+            btn_open_web.connect("clicked", lambda _, u=web_url: webbrowser.open(u))
+            btn_bar.pack_start(btn_open_web, False, False, 0)
+        else:
+            btn_open_web = Gtk.Button(label="🌐 Abrir no Google Drive (Chrome)")
+            btn_open_web.set_tooltip_text(web_url)
+            btn_open_web.connect("clicked", lambda _, u=web_url: webbrowser.open(u))
+            btn_bar.pack_start(btn_open_web, False, False, 0)
+
+            btn_open_pc = Gtk.Button(label="💻 Abrir no Computador")
+            btn_open_pc.set_tooltip_text(f"Abrir {full_local_path}")
+            btn_open_pc.connect("clicked", lambda _, p=full_local_path: self._open_local_path(p, reveal_folder=False))
+            btn_bar.pack_start(btn_open_pc, False, False, 0)
+
+        row_box.pack_start(btn_bar, False, False, 2)
+        row_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 2)
+        return row_box
+
+    def _on_search(self, query, live_typing: bool = False):
+        q = (query or "").strip()
+        if not q:
+            return
+        self.stack.set_visible_child_name("search")
+        self.search_title_lbl.set_markup(
+            f"<big><big><b>Resultados para: \"{GLib.markup_escape_text(q)}\"</b></big></big>"
+        )
+
+        accs = self.db.get_accounts()
+        primary_id = list(self.auth.accounts.keys())[0] if (self.auth and self.auth.accounts) else (accs[0]["account_id"] if accs else "")
+        acc_map = {}
+        for a in accs:
+            aid = a["account_id"]
+            acc_map[aid] = dict(a)
+            acc_map[aid]["is_primary"] = (aid == primary_id)
+
+        # 1. Immediate Local Computer Search (across all connected accounts in SQLite)
+        local_results = self.db.search_items(q, limit=60)
+        for child in self.search_local_list.get_children():
+            self.search_local_list.remove(child)
+        for child in self.search_cloud_list.get_children():
+            self.search_cloud_list.remove(child)
+
+        self.lbl_search_local_hdr.set_markup(
+            f"<b>💻 No Computador ({len(local_results)} encontrados nas pastas montadas)</b>"
+        )
+        if local_results:
+            for item in local_results:
+                self.search_local_list.add(self._build_search_result_row(item, "local", acc_map))
+        else:
+            lbl_empty = Gtk.Label(label="Nenhum arquivo correspondente encontrado na pasta local.")
+            lbl_empty.set_margin_top(20)
+            lbl_empty.set_opacity(0.7)
+            self.search_local_list.add(lbl_empty)
+        self.search_local_list.show_all()
+
+        # 2. Populate Cloud panel initially with matching catalog items + live API search in background
+        self.lbl_search_cloud_hdr.set_markup(
+            f"<b>☁️ No Google Drive ({len(local_results)} no catálogo • buscando online...)</b>"
+        )
+        if local_results:
+            for item in local_results:
+                self.search_cloud_list.add(self._build_search_result_row(item, "cloud", acc_map))
+        else:
+            lbl_loading = Gtk.Label(label="🔄 Buscando diretamente no Google Drive Web...")
+            lbl_loading.set_margin_top(20)
+            self.search_cloud_list.add(lbl_loading)
+        self.search_cloud_list.show_all()
+
+        search_token = time.time()
+        self._last_search_token = search_token
+
+        def _cloud_worker():
+            if live_typing:
+                time.sleep(0.25)
+                if getattr(self, "_last_search_token", None) != search_token:
+                    return
+            from core.api import DriveAPI
+            cloud_items = []
+            seen_ids = set()
+            for a in accs:
+                aid = a["account_id"]
+                try:
+                    api = DriveAPI(self.auth, aid)
+                    online_files = api.search_files_online(q, page_size=40)
+                    for f in online_files:
+                        fid = f.get("id")
+                        if fid and fid not in seen_ids:
+                            seen_ids.add(fid)
+                            f["account_id"] = aid
+                            f["is_directory"] = 1 if f.get("mimeType") == "application/vnd.google-apps.folder" else 0
+                            cloud_items.append(f)
+                except Exception:
+                    pass
+            # Also include local catalog matches if offline or not returned yet
+            for loc in local_results:
+                lid = loc.get("id")
+                if lid and lid not in seen_ids:
+                    seen_ids.add(lid)
+                    cloud_items.append(loc)
+
+            def _update_cloud_ui():
+                if getattr(self, "_last_search_token", None) != search_token or self.window is None:
+                    return False
+                for child in self.search_cloud_list.get_children():
+                    self.search_cloud_list.remove(child)
+                self.lbl_search_cloud_hdr.set_markup(
+                    f"<b>☁️ No Google Drive ({len(cloud_items)} encontrados na nuvem)</b>"
+                )
+                if cloud_items:
+                    for citem in cloud_items[:60]:
+                        self.search_cloud_list.add(self._build_search_result_row(citem, "cloud", acc_map))
+                else:
+                    lbl_none = Gtk.Label(label="Nenhum item encontrado no Google Drive.")
+                    lbl_none.set_margin_top(20)
+                    lbl_none.set_opacity(0.7)
+                    self.search_cloud_list.add(lbl_none)
+                self.search_cloud_list.show_all()
+                return False
+
+            GLib.idle_add(_update_cloud_ui)
+
+        threading.Thread(target=_cloud_worker, daemon=True).start()
 
     def _on_send_feedback(self):
         if not HAS_GTK:

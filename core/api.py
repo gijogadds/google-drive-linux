@@ -57,7 +57,7 @@ class DriveAPI:
         return self._request_json(url, timeout=10)
 
     def list_files(self, q: str = "trashed = false", page_size: int = 100, page_token: Optional[str] = None) -> Dict[str, Any]:
-        fields = "nextPageToken,files(id,name,mimeType,parents,size,md5Checksum,modifiedTime,createdTime,trashed,capabilities)"
+        fields = "nextPageToken,files(id,name,mimeType,parents,size,md5Checksum,modifiedTime,createdTime,trashed,webViewLink,capabilities)"
         params = {
             "q": q,
             "pageSize": page_size,
@@ -71,6 +71,15 @@ class DriveAPI:
         url = f"{DRIVE_API_BASE}/files?{urllib.parse.urlencode(params)}"
         res = self._request_json(url, timeout=15)
         return res if res is not None else {"files": []}
+
+    def search_files_online(self, query: str, page_size: int = 60) -> List[Dict[str, Any]]:
+        """Search files directly on Google Drive API v3 by name."""
+        q_escaped = (query or "").strip().replace("\\", "\\\\").replace("'", "\\'")
+        if not q_escaped:
+            return []
+        q_str = f"name contains '{q_escaped}' and trashed = false"
+        res = self.list_files(q=q_str, page_size=page_size)
+        return res.get("files", [])
 
     def get_file_metadata(self, file_id: str) -> Optional[Dict[str, Any]]:
         fields = "id,name,mimeType,parents,size,md5Checksum,modifiedTime,createdTime,trashed,webViewLink"
