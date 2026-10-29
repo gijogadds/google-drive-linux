@@ -180,42 +180,69 @@ class CrashReporter:
         return title, body
 
     @staticmethod
-    def report_issue(report: Dict[str, Any], github_token: Optional[str] = None):
-        """Submit the issue directly via API or open 1-click pre-filled browser submission."""
+    def _resolve_github_token(explicit_token: Optional[str] = None) -> Optional[str]:
+        """Resolve GitHub token from argument, environment, or local 'gh auth token' keyring."""
+        if explicit_token:
+            return explicit_token
+        env_tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if env_tok:
+            return env_tok
+        if shutil.which("gh"):
+            try:
+                res = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=4)
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def report_issue(report: Dict[str, Any], github_token: Optional[str] = None, silent_background: bool = True):
+        """Submit the diagnostic report silently in the background via GitHub API / gh CLI without opening browser tabs."""
         title, body = CrashReporter.format_github_issue(report)
 
-        # 1. If GitHub Token is provided in environment or argument, post directly via API
-        token = github_token or os.environ.get("GITHUB_TOKEN")
-        if token:
-            try:
-                headers = {
-                    "Authorization": f"token {token}",
-                    "Accept": "application/vnd.github.v3+json",
-                    "Content-Type": "application/json"
-                }
-                payload = json.dumps({"title": title, "body": body, "labels": ["bug", "automated-crash-report"]}).encode("utf-8")
-                req = urllib.request.Request(GITHUB_ISSUES_API, data=payload, headers=headers)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    res = json.loads(resp.read().decode("utf-8"))
-                    print(f"[CrashReporter] Issue criada com sucesso: {res.get('html_url')}")
-                    CrashReporter.notify_desktop("Google Drive - Erro Registrado", f"Issue criada no GitHub: {res.get('html_url')}")
-                    return res.get("html_url")
-            except Exception as e:
-                print(f"[CrashReporter] Erro ao postar via API: {e}")
+        def _send_in_background():
+            token = CrashReporter._resolve_github_token(github_token)
+            if token:
+                try:
+                    headers = {
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github.v3+json",
+                        "Content-Type": "application/json"
+                    }
+                    payload = json.dumps({"title": title, "body": body, "labels": ["bug", "automated-crash-report"]}).encode("utf-8")
+                    req = urllib.request.Request(GITHUB_ISSUES_API, data=payload, headers=headers)
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        res = json.loads(resp.read().decode("utf-8"))
+                        url = res.get("html_url", "")
+                        print(f"[CrashReporter] Diagnóstico enviado silenciosamente em segundo plano: {url}")
+                        return url
+                except Exception as e:
+                    print(f"[CrashReporter] Aviso ao enviar via API GitHub: {e}")
 
-        # 2. Fallback: Open 1-Click Issue submission URL in user's browser
-        query = urllib.parse.urlencode({"title": title, "body": body})
-        issue_url = f"https://github.com/{GITHUB_REPO}/issues/new?{query}"
-        
-        # Show desktop notification
-        CrashReporter.notify_desktop(
-            "Google Drive - Falha Detectada",
-            "Um relatório foi gerado. Clique para abrir a issue no GitHub e resolver o problema."
-        )
+            if shutil.which("gh"):
+                try:
+                    res = subprocess.run(
+                        ["gh", "issue", "create", "--repo", GITHUB_REPO, "--title", title, "--body", body],
+                        capture_output=True,
+                        text=True,
+                        timeout=15
+                    )
+                    if res.returncode == 0:
+                        url = res.stdout.strip()
+                        print(f"[CrashReporter] Diagnóstico enviado silenciosamente via gh CLI: {url}")
+                        return url
+                except Exception as e:
+                    print(f"[CrashReporter] Aviso ao enviar via gh CLI: {e}")
 
-        import webbrowser
-        webbrowser.open(issue_url)
-        return issue_url
+            print(f"[CrashReporter] Relatório salvo localmente em {CRASH_REPORT_DIR} (sem abrir navegador).")
+            return None
+
+        if silent_background:
+            import threading
+            threading.Thread(target=_send_in_background, daemon=True).start()
+            return None
+        return _send_in_background()
 
     @staticmethod
     def notify_desktop(title: str, message: str):
@@ -235,13 +262,18 @@ class CrashReporter:
 
 
 def install_global_crash_hook():
-    """Hook sys.excepthook to automatically capture any uncaught exception."""
+    """Hook sys.excepthook to automatically capture any uncaught exception silently in the background without crashing UI callbacks."""
     original_hook = sys.excepthook
 
     def custom_hook(exc_type, exc_value, exc_tb):
-        print(f"\n[CRASH DETECTADO] Capturando diagnóstico e gerando issue...")
-        report = CrashReporter.generate_report(exc_type, exc_value, exc_tb)
-        CrashReporter.report_issue(report)
-        original_hook(exc_type, exc_value, exc_tb)
+        if issubclass(exc_type, KeyboardInterrupt):
+            original_hook(exc_type, exc_value, exc_tb)
+            return
+        print(f"\n[Diagnóstico] Exceção capturada ({exc_value}); registrando log em segundo plano...")
+        try:
+            report = CrashReporter.generate_report(exc_type, exc_value, exc_tb)
+            CrashReporter.report_issue(report, silent_background=True)
+        except Exception as e:
+            print(f"[Diagnóstico] Erro interno ao salvar relatório: {e}")
 
     sys.excepthook = custom_hook

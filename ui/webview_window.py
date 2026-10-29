@@ -9,6 +9,7 @@ Replicates 100% of the Windows client screens and features with Linux-native enh
 """
 import os
 import sys
+import time
 import subprocess
 import threading
 import webbrowser
@@ -1058,13 +1059,16 @@ class GoogleDriveHomeWindow:
             webbrowser.open("https://drive.google.com")
 
     def _on_search_changed(self, entry):
-        q = entry.get_text().strip()
-        if not q:
-            if hasattr(self, "stack") and self.stack.get_visible_child_name() == "search":
-                self.stack.set_visible_child_name("home")
-            return
-        if len(q) >= 2:
-            self._on_search(q, live_typing=True)
+        try:
+            q = entry.get_text().strip()
+            if not q:
+                if hasattr(self, "stack") and self.stack.get_visible_child_name() == "search":
+                    self.stack.set_visible_child_name("home")
+                return
+            if len(q) >= 2:
+                self._on_search(q, live_typing=True)
+        except Exception as e:
+            print(f"[UI] Aviso ao processar alteração de busca: {e}")
 
     def _open_local_path(self, full_path: str, reveal_folder: bool = False):
         target = os.path.dirname(full_path) if reveal_folder else full_path
