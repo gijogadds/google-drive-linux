@@ -36,7 +36,6 @@ jobs:
   build-deb:
     name: Empacotar e Publicar Debian (.deb)
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout do Repositório
@@ -44,7 +43,11 @@ jobs:
 
       - name: Construir Pacote .deb
         run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            TAG_VERSION="133.0.2"
+          fi
           sed -i "s/Version: .*/Version: $TAG_VERSION/" packaging/debian/DEBIAN/control
           mkdir -p build/google-drive-linux/opt/google-drive-linux
           mkdir -p build/google-drive-linux/usr/local/bin
@@ -62,7 +65,14 @@ jobs:
           chmod 755 build/google-drive-linux/DEBIAN/postinst
           dpkg-deb --build build/google-drive-linux google-drive-linux_${TAG_VERSION}_amd64.deb
 
+      - name: Publicar Artefato .deb no Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-drive-linux-deb
+          path: google-drive-linux_*.deb
+
       - name: Criar GitHub Release e Anexar .deb
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: google-drive-linux_*.deb
