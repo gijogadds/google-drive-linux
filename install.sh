@@ -105,7 +105,7 @@ cp "${INSTALL_DIR}/assets/icons/sheets.png" /usr/share/icons/hicolor/256x256/app
 cp "${INSTALL_DIR}/assets/icons/slides.png" /usr/share/icons/hicolor/256x256/apps/google-slides.png
 gtk-update-icon-cache /usr/share/icons/hicolor || true
 
-echo -e "${BLUE}[6/6] Configurando e ativando serviço de inicialização automática no systemd...${NC}"
+echo -e "${BLUE}[6/6] Abrindo janela de configuração da pasta de montagem e ativando serviço...${NC}"
 USER_SYSTEMD_DIR="${USER_HOME}/.config/systemd/user"
 USER_WANTS_DIR="${USER_SYSTEMD_DIR}/default.target.wants"
 TARGET_UID=$(id -u "${TARGET_USER}")
@@ -114,9 +114,22 @@ cp "${SCRIPT_DIR}/packaging/systemd/google-drive.service" "${USER_SYSTEMD_DIR}/"
 ln -sf "${USER_SYSTEMD_DIR}/google-drive.service" "${USER_WANTS_DIR}/google-drive.service"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${USER_HOME}/.config/systemd"
 
+# Abrir janela gráfica opcional para escolha do ponto de montagem (com pré-definição padrão)
+if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || [ -d "/run/user/${TARGET_UID}" ]; then
+    sudo -u "${TARGET_USER}" \
+        DISPLAY="${DISPLAY:-:0}" \
+        WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
+        XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+        python3 "${INSTALL_DIR}/ui/install_wizard.py" || true
+fi
+
+ACTIVE_MOUNT_POINT=$(sudo -u "${TARGET_USER}" python3 -c "import sys; sys.path.insert(0, '${INSTALL_DIR}'); from core.config import get_mount_point; print(get_mount_point())" 2>/dev/null || echo "${USER_HOME}/GoogleDrive")
+
 if [ -d "/run/user/${TARGET_UID}" ]; then
     sudo -u "${TARGET_USER}" XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" systemctl --user daemon-reload || true
     sudo -u "${TARGET_USER}" XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" systemctl --user enable --now google-drive.service || true
+    sudo -u "${TARGET_USER}" XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" systemctl --user restart google-drive.service || true
 else
     su - "${TARGET_USER}" -c "systemctl --user daemon-reload || true"
     su - "${TARGET_USER}" -c "systemctl --user enable google-drive.service || true"
@@ -130,6 +143,6 @@ echo -e "${GREEN}        INSTALAÇÃO CONCLUÍDA COM SUCESSO!                   
 echo -e "${GREEN}==================================================================${NC}"
 echo -e "Como iniciar:"
 echo -e "  1. No terminal ou menu, execute: ${YELLOW}gdrive-cli login${NC} para autenticar com sua conta Google."
-echo -e "  2. O Google Drive será montado em: ${YELLOW}${USER_HOME}/GoogleDrive${NC}"
+echo -e "  2. O Google Drive está montado em: ${YELLOW}${ACTIVE_MOUNT_POINT}${NC}"
 echo -e "  3. Inicialização automática no login: ${GREEN}ATIVADA POR PADRÃO${NC} (google-drive.service)"
 echo -e "=================================================================="

@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStartPre=-/bin/sh -c 'fusermount3 -uz "$HOME/GoogleDrive" 2>/dev/null || fusermount -uz "$HOME/GoogleDrive" 2>/dev/null || true'
+ExecStartPre=-/usr/bin/python3 -c "import sys; sys.path.insert(0, '/opt/google-drive-linux'); from core.config import get_mount_point, DEFAULT_MOUNT_POINT, unmount_fuse_path; unmount_fuse_path(get_mount_point()); unmount_fuse_path(DEFAULT_MOUNT_POINT)"
 ExecStart=/opt/google-drive-linux/main.py --daemon
-ExecStopPost=-/bin/sh -c 'fusermount3 -uz "$HOME/GoogleDrive" 2>/dev/null || fusermount -uz "$HOME/GoogleDrive" 2>/dev/null || true'
+ExecStopPost=-/usr/bin/python3 -c "import sys; sys.path.insert(0, '/opt/google-drive-linux'); from core.config import get_mount_point, DEFAULT_MOUNT_POINT, unmount_fuse_path; unmount_fuse_path(get_mount_point()); unmount_fuse_path(DEFAULT_MOUNT_POINT)"
 Restart=on-failure
 RestartSec=5s
 Environment=PYTHONUNBUFFERED=1

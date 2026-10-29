@@ -46,15 +46,49 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
+def unmount_fuse_path(path: str, remove_if_empty: bool = False):
+    """Safely unmount a FUSE mountpoint and optionally remove the directory if empty."""
+    if not path:
+        return
+    subprocess.run(["fusermount3", "-uz", path], stderr=subprocess.DEVNULL, check=False)
+    subprocess.run(["fusermount", "-uz", path], stderr=subprocess.DEVNULL, check=False)
+    if remove_if_empty and os.path.isdir(path) and not os.path.ismount(path):
+        try:
+            if not os.listdir(path):
+                os.rmdir(path)
+        except OSError:
+            pass
+
+
+def _read_raw_config() -> Dict[str, Any]:
+    if os.path.exists(CONFIG_FILE_PATH):
+        try:
+            with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
 def ensure_directories():
     """Ensure all required application directories exist, recovering from stale FUSE mounts if needed."""
-    for path in [CONFIG_DIR, CACHE_DIR, LOG_DIR, DEFAULT_MOUNT_POINT]:
+    raw = _read_raw_config()
+    active_mount = raw.get("mount_point") or DEFAULT_MOUNT_POINT
+    active_cache = raw.get("cache_dir") or CACHE_DIR
+
+    # If user configured a custom mount point different from DEFAULT_MOUNT_POINT,
+    # clean up DEFAULT_MOUNT_POINT if it is a leftover mount or empty directory.
+    if active_mount != DEFAULT_MOUNT_POINT and os.path.exists(DEFAULT_MOUNT_POINT):
+        unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
+
+    for path in [CONFIG_DIR, active_cache, LOG_DIR, active_mount]:
         try:
             Path(path).mkdir(parents=True, exist_ok=True)
         except OSError:
             # Recover if path is a disconnected FUSE mount (ENOTCONN / FileExistsError)
-            subprocess.run(["fusermount3", "-uz", path], stderr=subprocess.DEVNULL, check=False)
-            subprocess.run(["fusermount", "-uz", path], stderr=subprocess.DEVNULL, check=False)
+            unmount_fuse_path(path, remove_if_empty=False)
             try:
                 Path(path).mkdir(parents=True, exist_ok=True)
             except OSError:

@@ -15,7 +15,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.config import (
-    load_config, save_config, ensure_directories,
+    load_config, save_config, ensure_directories, unmount_fuse_path,
     DEFAULT_MOUNT_POINT, IPC_SOCKET_PATH
 )
 from core.db import MetadataDB
@@ -62,6 +62,10 @@ class GoogleDriveDaemon:
         self.db = MetadataDB()
         self.auth = AuthManager()
         self.sync_worker = None
+        self.api = None
+        self.cache = None
+        self.account_id = None
+        self.active_mount_point = None
         self.updater = None
         self.github_updater = None
         self.fuse_thread = None
@@ -73,6 +77,32 @@ class GoogleDriveDaemon:
         self.open_settings_on_start = open_settings_on_start
         self.running = True
 
+    def _mount_vfs_at(self, mount_pt: str) -> tuple:
+        """Create mount directory and start FUSE thread at mount_pt."""
+        if self.active_mount_point and self.active_mount_point != mount_pt:
+            unmount_fuse_path(self.active_mount_point, remove_if_empty=True)
+        if mount_pt != DEFAULT_MOUNT_POINT and os.path.exists(DEFAULT_MOUNT_POINT):
+            unmount_fuse_path(DEFAULT_MOUNT_POINT, remove_if_empty=True)
+
+        try:
+            os.makedirs(mount_pt, exist_ok=True)
+        except Exception as e:
+            msg = f"Não foi possível criar a pasta de montagem ({mount_pt}): {e}"
+            print(f"[Aviso] {msg}")
+            return False, msg
+
+        self.active_mount_point = mount_pt
+        if self.api and self.cache and self.account_id:
+            self.fuse_thread = threading.Thread(
+                target=mount_fuse,
+                args=(mount_pt, self.db, self.cache, self.api, self.account_id),
+                kwargs={"foreground": True},
+                daemon=True,
+                name="FUSEThread"
+            )
+            self.fuse_thread.start()
+        return True, f"As alterações foram aplicadas com sucesso!\n\nPasta do Google Drive ativa em:\n{mount_pt}"
+
     def ensure_sync_started(self):
         """Start SyncWorker and FUSE mount if an account is connected and not yet running."""
         if self.sync_worker is not None:
@@ -81,18 +111,19 @@ class GoogleDriveDaemon:
         if not accounts:
             return
         account_id = accounts[0]["account_id"]
+        self.account_id = account_id
         self.auth.accounts = self.auth._load_accounts_from_disk()
 
-        api = DriveAPI(self.auth, account_id)
-        cache = CacheManager(
+        self.api = DriveAPI(self.auth, account_id)
+        self.cache = CacheManager(
             db=self.db,
-            api=api,
+            api=self.api,
             chunk_size_mb=self.config.get("chunk_size_mb", 16),
             max_cache_size_gb=self.config.get("max_cache_size_gb", 10),
             cache_dir=self.config.get("cache_dir")
         )
 
-        self.sync_worker = SyncWorker(db=self.db, api=api, account_id=account_id)
+        self.sync_worker = SyncWorker(db=self.db, api=self.api, account_id=account_id)
         self.sync_worker.start()
 
         if self.indicator:
@@ -101,20 +132,7 @@ class GoogleDriveDaemon:
             self.home_window.sync_worker = self.sync_worker
 
         mount_pt = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
-        try:
-            os.makedirs(mount_pt, exist_ok=True)
-        except Exception as e:
-            print(f"[Aviso] Não foi possível criar o diretório de montagem ({mount_pt}): {e}")
-            print("[Info] Se você configurou uma HD externa, certifique-se de que ela está conectada e montada.")
-
-        self.fuse_thread = threading.Thread(
-            target=mount_fuse,
-            args=(mount_pt, self.db, cache, api, account_id),
-            kwargs={"foreground": True},
-            daemon=True,
-            name="FUSEThread"
-        )
-        self.fuse_thread.start()
+        self._mount_vfs_at(mount_pt)
 
     def _start_ipc_server(self):
         """Listen on UNIX socket so desktop icon launches open the window in the running instance."""
@@ -255,9 +273,26 @@ class GoogleDriveDaemon:
         print(f"[Notificação] Nova versão do Google Drive disponível: {update_info['latest_version']}")
 
     def _on_settings_saved(self, new_config):
-        self.config = new_config
+        old_mount = self.active_mount_point or self.config.get("mount_point", DEFAULT_MOUNT_POINT)
+        new_mount = new_config.get("mount_point", DEFAULT_MOUNT_POINT)
+        self.config = dict(new_config)
         save_config(self.config)
+
+        if self.home_window:
+            self.home_window.config = self.config
+        if self.indicator:
+            self.indicator.config = self.config
+            self.indicator.update_menu()
+        if self.settings_dialog:
+            self.settings_dialog.config = self.config
+
+        if new_mount != old_mount or not os.path.exists(new_mount):
+            ok, msg = self._mount_vfs_at(new_mount)
+            print(f"[Config] {msg}")
+            return ok, msg
+
         print("[Config] Novas configurações aplicadas com sucesso.")
+        return True, f"Configurações salvas e aplicadas com sucesso!\n\nPasta do Google Drive ativa em:\n{new_mount}"
 
     def _handle_shutdown(self, signum, frame):
         print("\n[Encerrando] Desmontando sistema de arquivos e finalizando threads...")

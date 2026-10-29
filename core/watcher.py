@@ -19,7 +19,15 @@ class SyncWorker(threading.Thread):
         self.poll_interval = poll_interval_sec
         self.running = True
         self.paused = False
-        self.current_activity = "Ocioso - Tudo atualizado"
+        self.is_syncing = False
+        self.initial_scan_complete = False
+        self.sync_phase = "Iniciando sincronização..."
+        self.last_synced_file = ""
+        self.session_synced_count = 0
+        self.last_sync_timestamp = 0
+        self.resume_page_token: Optional[str] = None
+        self.recent_synced_items = []
+        self.current_activity = "Sincronizando catálogo..."
         self.active_transfers: Dict[str, Any] = {}
 
     def run(self):
@@ -33,13 +41,14 @@ class SyncWorker(threading.Thread):
                 if not self.paused:
                     self._process_pending_operations()
 
-                    if time.time() - last_poll >= self.poll_interval:
+                    # If initial catalog scan still has pages, continue immediately; otherwise poll every poll_interval
+                    if self.resume_page_token or (time.time() - last_poll >= self.poll_interval):
                         self.sync_remote_metadata()
                         last_poll = time.time()
             except Exception as e:
                 print(f"[SyncWorker] Erro no loop de sincronização: {e}")
 
-            time.sleep(2)
+            time.sleep(1 if self.resume_page_token else 2)
 
     def pause(self):
         self.paused = True
@@ -183,37 +192,84 @@ class SyncWorker(threading.Thread):
             })
         if batch:
             self.db.upsert_items_batch(batch)
+            self.session_synced_count += len(batch)
+            self.last_synced_file = batch[-1]["name"]
+            for item in batch[-15:]:
+                self.recent_synced_items.insert(0, item)
+            if len(self.recent_synced_items) > 60:
+                self.recent_synced_items = self.recent_synced_items[:60]
 
     def sync_remote_metadata(self):
         """Fetch remote file index from Google Drive and ingest into SQLite."""
-        self.current_activity = "Verificando alterações na nuvem..."
+        self.is_syncing = True
+        self.sync_phase = "Consultando cota e alterações na nuvem..."
+        self.current_activity = self.sync_phase
         now = int(time.time())
 
-        # 1. Update storage quota
-        self._update_account_quota()
+        try:
+            # 1. Update storage quota
+            self._update_account_quota()
 
-        # 2. Priority sync: Root directory ('Meu Drive') so mount point is populated immediately
-        root_token = None
-        while self.running and not self.paused:
-            resp = self.api.list_files(q="'root' in parents and trashed = false", page_size=200, page_token=root_token)
-            files = resp.get("files", [])
-            self._ingest_files(files, now, force_parent_root=True)
-            root_token = resp.get("nextPageToken")
-            if not root_token:
-                break
-            time.sleep(0.25)
+            # 2. Priority sync: Root directory ('Meu Drive') so mount point is populated immediately
+            self.sync_phase = "Sincronizando pasta raiz (Meu Drive)..."
+            self.current_activity = self.sync_phase
+            root_token = None
+            while self.running and not self.paused:
+                resp = self.api.list_files(q="'root' in parents and trashed = false", page_size=200, page_token=root_token)
+                files = resp.get("files", [])
+                self._ingest_files(files, now, force_parent_root=True)
+                root_token = resp.get("nextPageToken")
+                if not root_token:
+                    break
+                time.sleep(0.2)
 
-        # 3. Background tree sync with polite rate pacing
-        page_token = None
-        pages_fetched = 0
-        while self.running and not self.paused and pages_fetched < 25:
-            resp = self.api.list_files(q="trashed = false", page_size=200, page_token=page_token)
-            files = resp.get("files", [])
-            self._ingest_files(files, now, force_parent_root=False)
-            pages_fetched += 1
-            page_token = resp.get("nextPageToken")
-            if not page_token:
-                break
-            time.sleep(0.35)
+            # 3. Map all folders across Drive on initial scan so subfolder navigation is complete
+            if not self.initial_scan_complete:
+                self.sync_phase = "Mapeando estrutura de pastas do Google Drive..."
+                self.current_activity = self.sync_phase
+                folder_token = None
+                folder_pages = 0
+                while self.running and not self.paused and folder_pages < 30:
+                    resp = self.api.list_files(
+                        q="mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+                        page_size=200,
+                        page_token=folder_token
+                    )
+                    files = resp.get("files", [])
+                    self._ingest_files(files, now, force_parent_root=False)
+                    folder_pages += 1
+                    folder_token = resp.get("nextPageToken")
+                    if not folder_token:
+                        break
+                    time.sleep(0.2)
 
-        self.current_activity = "Ocioso - Tudo atualizado"
+            # 4. Background file tree sync continuing from resume_page_token
+            page_token = self.resume_page_token
+            pages_fetched = 0
+            while self.running and not self.paused and pages_fetched < 40:
+                stats = self.db.get_sync_stats()
+                self.sync_phase = f"Sincronizando catálogo ({stats['total_items']} itens indexados)..."
+                self.current_activity = self.sync_phase
+                resp = self.api.list_files(q="trashed = false", page_size=200, page_token=page_token)
+                files = resp.get("files", [])
+                self._ingest_files(files, now, force_parent_root=False)
+                pages_fetched += 1
+                page_token = resp.get("nextPageToken")
+                self.resume_page_token = page_token
+                if not page_token:
+                    self.initial_scan_complete = True
+                    self.resume_page_token = None
+                    break
+                time.sleep(0.25)
+
+            self.last_sync_timestamp = int(time.time())
+        finally:
+            if self.initial_scan_complete or not self.resume_page_token:
+                self.is_syncing = False
+                self.sync_phase = "Sincronizado e atualizado"
+                self.current_activity = "Ocioso - Tudo atualizado"
+            else:
+                self.is_syncing = True
+                stats = self.db.get_sync_stats()
+                self.sync_phase = f"Sincronizando em segundo plano ({stats['total_items']} itens)..."
+                self.current_activity = self.sync_phase

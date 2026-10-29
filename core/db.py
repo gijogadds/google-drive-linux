@@ -182,6 +182,43 @@ class MetadataDB:
             cursor.execute("SELECT * FROM items WHERE parent_id = ? AND is_trashed = 0 ORDER BY is_directory DESC, name ASC", (parent_id,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_sync_stats(self) -> Dict[str, int]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    COUNT(*),
+                    COALESCE(SUM(CASE WHEN is_directory = 0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN is_directory = 1 THEN 1 ELSE 0 END), 0)
+                FROM items
+                WHERE is_trashed = 0
+            """)
+            row = cursor.fetchone()
+            total_items = row[0] if row else 0
+            total_files = row[1] if row else 0
+            total_dirs = row[2] if row else 0
+            cursor.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending', 'running')")
+            op_row = cursor.fetchone()
+            pending_ops = op_row[0] if op_row else 0
+            return {
+                "total_items": total_items,
+                "total_files": total_files,
+                "total_dirs": total_dirs,
+                "pending_ops": pending_ops,
+            }
+
+    def get_recent_items(self, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, name, mime_type, is_directory, size, sync_status, modified_time
+                FROM items
+                WHERE is_trashed = 0
+                ORDER BY modified_time DESC, is_directory DESC, name ASC
+                LIMIT ?
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
     def update_sync_status(self, item_id: str, status: str, local_cache_path: Optional[str] = None):
         with self._get_connection() as conn:
             cursor = conn.cursor()

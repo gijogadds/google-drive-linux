@@ -73,8 +73,10 @@ class GoogleDriveHomeWindow:
 
         self._build_interface(window)
         window.show_all()
-        window.present()
         self.window = window
+        self._refresh_live_ui()
+        GLib.timeout_add(1500, self._refresh_live_ui)
+        window.present()
 
     def _on_window_destroy(self, _widget):
         self.window = None
@@ -386,14 +388,43 @@ class GoogleDriveHomeWindow:
         grid.set_column_homogeneous(True)
         grid.set_hexpand(True)
 
-        # Card 1: Dog Card (Status de Sincronização)
-        card1 = self._create_card(
-            "Status de sincronização",
-            "Seus arquivos estão atualizados",
-            "As atividades nos seus arquivos e pastas vão aparecer aqui.",
-            os.path.join(assets_dir, "Selling-point-1.svg")
-        )
-        grid.attach(card1, 0, 0, 1, 1)
+        # Card 1: Status de Sincronização (Dinâmico em Tempo Real)
+        card1_frame = Gtk.Frame()
+        card1_frame.set_hexpand(True)
+        card1_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card1_box.set_margin_top(14)
+        card1_box.set_margin_bottom(14)
+        card1_box.set_margin_start(14)
+        card1_box.set_margin_end(14)
+        card1_box.set_size_request(280, 220)
+
+        lbl_c1_t = Gtk.Label()
+        lbl_c1_t.set_markup("<b><big>Status de sincronização</big></b>")
+        lbl_c1_t.set_alignment(0, 0.5)
+        card1_box.pack_start(lbl_c1_t, False, False, 0)
+
+        self.home_sync_subtitle_lbl = Gtk.Label(label="Verificando status da sincronização...")
+        self.home_sync_subtitle_lbl.set_line_wrap(True)
+        self.home_sync_subtitle_lbl.set_max_width_chars(38)
+        self.home_sync_subtitle_lbl.set_alignment(0, 0.5)
+        card1_box.pack_start(self.home_sync_subtitle_lbl, False, False, 0)
+
+        self.home_sync_desc_lbl = Gtk.Label(label="Consultando catálogo local e nuvem...")
+        self.home_sync_desc_lbl.set_line_wrap(True)
+        self.home_sync_desc_lbl.set_max_width_chars(40)
+        self.home_sync_desc_lbl.set_opacity(0.8)
+        self.home_sync_desc_lbl.set_alignment(0, 0.5)
+        card1_box.pack_start(self.home_sync_desc_lbl, False, False, 0)
+
+        self.home_sync_progress = Gtk.ProgressBar()
+        self.home_sync_progress.set_no_show_all(True)
+        card1_box.pack_start(self.home_sync_progress, False, False, 2)
+
+        c1_img = self._create_scaled_image(os.path.join(assets_dir, "Selling-point-1.svg"), 95, 95)
+        card1_box.pack_start(c1_img, True, True, 2)
+
+        card1_frame.add(card1_box)
+        grid.attach(card1_frame, 0, 0, 1, 1)
 
         # Card 2: Flower Girl Card (Tudo em dia!)
         card2 = self._create_card(
@@ -448,62 +479,222 @@ class GoogleDriveHomeWindow:
         return scroll
 
     # =========================================================================
-    # PÁGINA 2: ATIVIDADE DE SINCRONIZAÇÃO (Imagem 3 enviada pelo usuário)
+    # PÁGINA 2: ATIVIDADE DE SINCRONIZAÇÃO (Tempo Real)
     # =========================================================================
     def _create_page_activity(self, assets_dir):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
-        box.set_margin_top(25)
-        box.set_margin_bottom(25)
-        box.set_margin_start(30)
-        box.set_margin_end(30)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_top(20)
+        box.set_margin_bottom(20)
+        box.set_margin_start(25)
+        box.set_margin_end(25)
 
-        # Header Title: "☁️ Atualizado / Sincronizado há 2 horas"
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        lbl_status = Gtk.Label()
-        lbl_status.set_markup("<big><big><b>☁️ Atualizado</b></big></big>")
-        lbl_status.set_alignment(0, 0.5)
-        title_box.pack_start(lbl_status, False, False, 0)
+        self.act_status_lbl = Gtk.Label()
+        self.act_status_lbl.set_markup("<big><big><b>🔄 Sincronizando...</b></big></big>")
+        self.act_status_lbl.set_alignment(0, 0.5)
+        title_box.pack_start(self.act_status_lbl, False, False, 0)
 
-        lbl_time = Gtk.Label(label="Sincronizado recentemente")
-        lbl_time.set_opacity(0.6)
-        lbl_time.set_alignment(0, 0.5)
-        title_box.pack_start(lbl_time, False, False, 0)
+        self.act_time_lbl = Gtk.Label(label="Carregando atividades em tempo real...")
+        self.act_time_lbl.set_opacity(0.75)
+        self.act_time_lbl.set_alignment(0, 0.5)
+        title_box.pack_start(self.act_time_lbl, False, False, 0)
+
+        self.act_progress = Gtk.ProgressBar()
+        self.act_progress.set_no_show_all(True)
+        title_box.pack_start(self.act_progress, False, False, 2)
+
         box.pack_start(title_box, False, False, 0)
 
         # Table Header (Nome, Tamanho do arquivo, Status)
         tbl_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        tbl_header.set_margin_top(15)
+        tbl_header.set_margin_top(8)
 
-        h_name = Gtk.Label(label="Nome")
+        h_name = Gtk.Label()
+        h_name.set_markup("<b>Nome do Arquivo / Pasta</b>")
         h_name.set_alignment(0, 0.5)
         tbl_header.pack_start(h_name, True, True, 0)
 
-        h_size = Gtk.Label(label="Tamanho do arquivo")
+        h_size = Gtk.Label()
+        h_size.set_markup("<b>Tamanho</b>")
+        h_size.set_size_request(130, -1)
         h_size.set_alignment(0, 0.5)
-        tbl_header.pack_start(h_size, False, False, 50)
+        tbl_header.pack_start(h_size, False, False, 10)
 
-        h_stat = Gtk.Label(label="Status")
+        h_stat = Gtk.Label()
+        h_stat.set_markup("<b>Status Real</b>")
+        h_stat.set_size_request(170, -1)
         h_stat.set_alignment(0, 0.5)
-        tbl_header.pack_start(h_stat, False, False, 30)
+        tbl_header.pack_start(h_stat, False, False, 10)
 
         box.pack_start(tbl_header, False, False, 0)
         box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
 
-        # Center Empty State (The Dog with Cloud Illustration - Imagem 3!)
-        empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        empty_box.set_valign(Gtk.Align.CENTER)
-        empty_box.set_vexpand(True)
+        # Scrollable real-time file list
+        self.act_scroll = Gtk.ScrolledWindow()
+        self.act_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.act_scroll.set_vexpand(True)
+
+        self.act_list_box = Gtk.ListBox()
+        self.act_list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.act_scroll.add(self.act_list_box)
+        box.pack_start(self.act_scroll, True, True, 0)
+
+        # Center Empty State (shown only if 0 items exist)
+        self.act_empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.act_empty_box.set_valign(Gtk.Align.CENTER)
+        self.act_empty_box.set_vexpand(True)
+        self.act_empty_box.set_no_show_all(True)
 
         dog_path = os.path.join(assets_dir, "Selling-point-1.svg")
-        dog_img = self._create_scaled_image(dog_path, 150, 150)
-        empty_box.pack_start(dog_img, False, False, 0)
+        dog_img = self._create_scaled_image(dog_path, 130, 130)
+        self.act_empty_box.pack_start(dog_img, False, False, 0)
 
         lbl_msg = Gtk.Label(label="As atividades nos seus arquivos e pastas vão aparecer aqui")
         lbl_msg.set_opacity(0.7)
-        empty_box.pack_start(lbl_msg, False, False, 0)
+        self.act_empty_box.pack_start(lbl_msg, False, False, 0)
 
-        box.pack_start(empty_box, True, True, 0)
+        box.pack_start(self.act_empty_box, True, True, 0)
         return box
+
+    @staticmethod
+    def _format_size(size_bytes: int, is_dir: bool) -> str:
+        if is_dir:
+            return "Pasta"
+        if not size_bytes or size_bytes <= 0:
+            return "Doc Web"
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 ** 2:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 ** 3:
+            return f"{size_bytes / (1024 ** 2):.1f} MB"
+        return f"{size_bytes / (1024 ** 3):.2f} GB"
+
+    def _refresh_live_ui(self) -> bool:
+        """Update Home Card 1 and Activity Tab with real-time database and SyncWorker state."""
+        if self.window is None:
+            return False
+
+        try:
+            stats = self.db.get_sync_stats()
+            total_items = stats["total_items"]
+            total_files = stats["total_files"]
+            total_dirs = stats["total_dirs"]
+            pending_ops = stats["pending_ops"]
+
+            is_syncing = bool(self.sync_worker and getattr(self.sync_worker, "is_syncing", False))
+            is_paused = bool(self.sync_worker and getattr(self.sync_worker, "paused", False))
+            phase = getattr(self.sync_worker, "sync_phase", "Sincronizando...") if self.sync_worker else "Aguardando..."
+            last_file = getattr(self.sync_worker, "last_synced_file", "") if self.sync_worker else ""
+            mount_pt = self.config.get("mount_point", os.path.expanduser("~/GoogleDrive"))
+            sync_mode_label = "Espelhar (Offline)" if self.config.get("sync_mode") == "mirror" else "Stream (Sob demanda)"
+
+            # 1. Update Home Card 1 ("Status de sincronização")
+            if hasattr(self, "home_sync_subtitle_lbl"):
+                if is_paused:
+                    self.home_sync_subtitle_lbl.set_markup("<b>⏸️ Sincronização pausada</b>")
+                    self.home_sync_desc_lbl.set_text(
+                        f"Indexados: {total_files} arquivos e {total_dirs} pastas\n"
+                        f"Modo: {sync_mode_label}\n"
+                        f"Pasta: {mount_pt}"
+                    )
+                    self.home_sync_progress.hide()
+                elif is_syncing or pending_ops > 0:
+                    self.home_sync_subtitle_lbl.set_markup(f"<b>🔄 {GLib.markup_escape_text(phase)}</b>")
+                    desc_lines = [
+                        f"Catálogo sincronizado até agora: {total_files} arquivos e {total_dirs} pastas",
+                    ]
+                    if last_file:
+                        desc_lines.append(f"Sincronizando: {last_file[:42]}")
+                    desc_lines.append(f"Pasta ativa: {mount_pt}")
+                    self.home_sync_desc_lbl.set_text("\n".join(desc_lines))
+                    self.home_sync_progress.show()
+                    self.home_sync_progress.pulse()
+                else:
+                    self.home_sync_subtitle_lbl.set_markup("<b>✅ Catálogo sincronizado e atualizado</b>")
+                    self.home_sync_desc_lbl.set_text(
+                        f"Total disponível: {total_files} arquivos e {total_dirs} pastas\n"
+                        f"Modo: {sync_mode_label}\n"
+                        f"Pasta ativa: {mount_pt}"
+                    )
+                    self.home_sync_progress.hide()
+
+            # 2. Update Activity Tab Header & File List
+            if hasattr(self, "act_status_lbl"):
+                if is_paused:
+                    self.act_status_lbl.set_markup("<big><big><b>⏸️ Sincronização pausada</b></big></big>")
+                    self.act_progress.hide()
+                elif is_syncing or pending_ops > 0:
+                    self.act_status_lbl.set_markup(
+                        f"<big><big><b>🔄 {GLib.markup_escape_text(phase)}</b></big></big>"
+                    )
+                    self.act_progress.show()
+                    self.act_progress.pulse()
+                else:
+                    self.act_status_lbl.set_markup(
+                        f"<big><big><b>☁️ Atualizado ({total_items} itens sincronizados)</b></big></big>"
+                    )
+                    self.act_progress.hide()
+
+                self.act_time_lbl.set_text(
+                    f"{total_files} arquivos • {total_dirs} pastas • Modo: {sync_mode_label} • Pasta: {mount_pt}"
+                )
+
+                # Populate recent items list
+                recent = []
+                if self.sync_worker and getattr(self.sync_worker, "recent_synced_items", None):
+                    recent = list(self.sync_worker.recent_synced_items[:35])
+                if not recent:
+                    recent = self.db.get_recent_items(limit=35)
+
+                for child in self.act_list_box.get_children():
+                    self.act_list_box.remove(child)
+
+                if recent:
+                    self.act_empty_box.hide()
+                    self.act_scroll.show()
+                    for idx, item in enumerate(recent):
+                        row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                        row_box.set_margin_top(5)
+                        row_box.set_margin_bottom(5)
+                        row_box.set_margin_start(4)
+                        row_box.set_margin_end(4)
+
+                        is_dir = bool(item.get("is_directory"))
+                        icon_prefix = "📁" if is_dir else "📄"
+                        name_str = item.get("name", "Sem nome")
+                        lbl_n = Gtk.Label(label=f"{icon_prefix}  {name_str}")
+                        lbl_n.set_alignment(0, 0.5)
+                        lbl_n.set_ellipsize(3)  # Pango.EllipsizeMode.END
+                        row_box.pack_start(lbl_n, True, True, 0)
+
+                        lbl_sz = Gtk.Label(label=self._format_size(int(item.get("size", 0)), is_dir))
+                        lbl_sz.set_size_request(130, -1)
+                        lbl_sz.set_alignment(0, 0.5)
+                        lbl_sz.set_opacity(0.8)
+                        row_box.pack_start(lbl_sz, False, False, 10)
+
+                        if is_syncing and idx < 3:
+                            st_text = "🔄 Sincronizando..."
+                        elif item.get("sync_status") == "synced" or item.get("sync_status") == "pinned":
+                            st_text = "✅ Sincronizado local"
+                        else:
+                            st_text = "☁️ Sincronizado (Stream)"
+
+                        lbl_st = Gtk.Label(label=st_text)
+                        lbl_st.set_size_request(170, -1)
+                        lbl_st.set_alignment(0, 0.5)
+                        row_box.pack_start(lbl_st, False, False, 10)
+
+                        self.act_list_box.add(row_box)
+                    self.act_list_box.show_all()
+                else:
+                    self.act_scroll.hide()
+                    self.act_empty_box.show_all()
+        except Exception as e:
+            print(f"[UI] Erro ao atualizar status em tempo real: {e}")
+
+        return True
 
     # =========================================================================
     # PÁGINA 3: NOTIFICAÇÕES (Imagem 4 enviada pelo usuário)
@@ -838,7 +1029,7 @@ class SettingsDialog:
         sync_box.pack_start(mirror_rb, False, False, 0)
 
         # Helper for folder browser
-        def _choose_folder(parent, entry):
+        def _choose_folder(parent, entry, is_mount_point=False):
             dialog = Gtk.FileChooserDialog(
                 title="Selecione um Diretório (ex: na sua HD Externa)",
                 transient_for=parent,
@@ -849,7 +1040,19 @@ class SettingsDialog:
                 "Selecionar", Gtk.ResponseType.OK
             )
             if dialog.run() == Gtk.ResponseType.OK:
-                entry.set_text(dialog.get_filename())
+                chosen = dialog.get_filename()
+                if chosen and is_mount_point:
+                    # If user selected an existing non-empty drive/folder root that isn't already GoogleDrive,
+                    # append /GoogleDrive so FUSE mounts inside a dedicated GoogleDrive folder
+                    base = os.path.basename(chosen.rstrip("/")).lower()
+                    if base not in ("googledrive", "google drive", "google-drive"):
+                        try:
+                            if os.path.isdir(chosen) and os.listdir(chosen):
+                                chosen = os.path.join(chosen, "GoogleDrive")
+                        except OSError:
+                            chosen = os.path.join(chosen, "GoogleDrive")
+                if chosen:
+                    entry.set_text(chosen)
             dialog.destroy()
 
         # Mount Point Entry
@@ -858,7 +1061,7 @@ class SettingsDialog:
         path_entry = Gtk.Entry()
         path_entry.set_text(self.config.get("mount_point", os.path.expanduser("~/GoogleDrive")))
         btn_browse_mount = Gtk.Button(label="Procurar...")
-        btn_browse_mount.connect("clicked", lambda _: _choose_folder(window, path_entry))
+        btn_browse_mount.connect("clicked", lambda _: _choose_folder(window, path_entry, is_mount_point=True))
 
         path_box.pack_start(path_label, False, False, 0)
         path_box.pack_start(path_entry, True, True, 0)
@@ -872,7 +1075,7 @@ class SettingsDialog:
         default_cache = self.config.get("cache_dir", os.path.expanduser("~/.cache/google-drive-linux"))
         cache_entry.set_text(default_cache)
         btn_browse_cache = Gtk.Button(label="Procurar...")
-        btn_browse_cache.connect("clicked", lambda _: _choose_folder(window, cache_entry))
+        btn_browse_cache.connect("clicked", lambda _: _choose_folder(window, cache_entry, is_mount_point=False))
 
         cache_box.pack_start(cache_label, False, False, 0)
         cache_box.pack_start(cache_entry, True, True, 0)
@@ -897,18 +1100,36 @@ class SettingsDialog:
         btn_save = Gtk.Button(label="Salvar e Aplicar")
 
         def _save(_):
-            self.config["sync_mode"] = "mirror" if mirror_rb.get_active() else "stream"
-            self.config["mount_point"] = path_entry.get_text()
-            self.config["cache_dir"] = cache_entry.get_text()
-            self.config["autostart"] = autostart_cb.get_active()
+            updated_config = dict(self.config)
+            updated_config["sync_mode"] = "mirror" if mirror_rb.get_active() else "stream"
+            updated_config["mount_point"] = path_entry.get_text().strip() or os.path.expanduser("~/GoogleDrive")
+            updated_config["cache_dir"] = cache_entry.get_text().strip() or os.path.expanduser("~/.cache/google-drive-linux")
+            updated_config["autostart"] = autostart_cb.get_active()
             try:
-                action = "enable" if self.config["autostart"] else "disable"
+                action = "enable" if updated_config["autostart"] else "disable"
                 subprocess.run(["systemctl", "--user", action, "google-drive.service"], capture_output=True)
             except Exception:
                 pass
+
+            ok = True
+            msg = f"Configurações aplicadas com sucesso!\n\nPonto de Montagem ativo:\n{updated_config['mount_point']}"
             if self.on_save:
-                self.on_save(self.config)
-            window.destroy()
+                res = self.on_save(updated_config)
+                if isinstance(res, tuple) and len(res) == 2:
+                    ok, msg = res
+            self.config = updated_config
+
+            msg_dialog = Gtk.MessageDialog(
+                transient_for=window,
+                message_type=Gtk.MessageType.INFO if ok else Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Configurações Salvas e Aplicadas!" if ok else "Erro ao Aplicar Configurações"
+            )
+            msg_dialog.format_secondary_text(msg)
+            msg_dialog.run()
+            msg_dialog.destroy()
+            if ok:
+                window.destroy()
 
         btn_save.connect("clicked", _save)
         btn_box.pack_start(btn_save, False, False, 0)
