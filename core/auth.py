@@ -62,14 +62,38 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             
-            # Read official Google Drive success template if exists
-            success_template_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "assets", "html", "browserauth_result_template.html"
-            )
+            # Read official Google Drive success template and format %s placeholders
+            root_dir = os.path.dirname(os.path.dirname(__file__))
+            success_template_path = os.path.join(root_dir, "assets", "html", "browserauth_result_template.html")
+            icon_drive_path = os.path.join(root_dir, "assets", "icons", "drive_fs.png")
+            icon_google_path = os.path.join(root_dir, "assets", "icons", "google_g.png")
+
+            def _b64_img(p):
+                if os.path.exists(p):
+                    with open(p, "rb") as img_f:
+                        return base64.b64encode(img_f.read()).decode("ascii")
+                return ""
+
+            drive_b64 = _b64_img(icon_drive_path)
+            google_b64 = _b64_img(icon_google_path) or drive_b64
+
             if os.path.exists(success_template_path):
                 with open(success_template_path, "r", encoding="utf-8") as f:
-                    content = f.read().replace("$RESULT$", "Sucesso! Pode fechar esta janela.")
+                    raw_tpl = f.read()
+                try:
+                    content = raw_tpl % (
+                        "ltr",
+                        "pt-BR",
+                        "Google Drive - Conectado",
+                        drive_b64,
+                        google_b64,
+                        "Sucesso!",
+                        drive_b64,
+                        "Conta conectada ao Google Drive para Linux.",
+                        "Você já pode fechar esta guia e retornar ao aplicativo."
+                    )
+                except Exception:
+                    content = raw_tpl
             else:
                 content = """
                 <html>

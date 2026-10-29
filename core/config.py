@@ -3,6 +3,7 @@ Google Drive for Linux - Configuration & Environment Manager
 """
 import os
 import json
+import subprocess
 from pathlib import Path
 from typing import Dict, Any
 
@@ -46,9 +47,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 
 def ensure_directories():
-    """Ensure all required application directories exist."""
+    """Ensure all required application directories exist, recovering from stale FUSE mounts if needed."""
     for path in [CONFIG_DIR, CACHE_DIR, LOG_DIR, DEFAULT_MOUNT_POINT]:
-        Path(path).mkdir(parents=True, exist_ok=True)
+        try:
+            Path(path).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Recover if path is a disconnected FUSE mount (ENOTCONN / FileExistsError)
+            subprocess.run(["fusermount3", "-uz", path], stderr=subprocess.DEVNULL, check=False)
+            subprocess.run(["fusermount", "-uz", path], stderr=subprocess.DEVNULL, check=False)
+            try:
+                Path(path).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
 
 
 def load_config() -> Dict[str, Any]:

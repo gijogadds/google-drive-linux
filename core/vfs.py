@@ -51,6 +51,7 @@ class GoogleDriveFUSE(Operations):
         self.account_id = account_id
         self.open_files: Dict[int, Dict[str, Any]] = {}
         self.fh_counter = 1
+        self._hydrated_dirs = set()
 
     def _resolve_item(self, path: str) -> Optional[Dict[str, Any]]:
         """Resolve a POSIX path (e.g. /Folder/Subfolder/file.pdf) to an item record in SQLite."""
@@ -87,11 +88,16 @@ class GoogleDriveFUSE(Operations):
         now = int(time.time())
         mtime = item.get("modified_time") or now
 
+        uid = os.getuid()
+        gid = os.getgid()
+
         if item.get("is_directory"):
             return {
                 "st_mode": stat.S_IFDIR | 0o755,
                 "st_nlink": 2,
                 "st_size": 4096,
+                "st_uid": uid,
+                "st_gid": gid,
                 "st_ctime": mtime,
                 "st_mtime": mtime,
                 "st_atime": mtime
@@ -99,15 +105,20 @@ class GoogleDriveFUSE(Operations):
         else:
             # If it's a native Google doc, synthesize desktop launcher size
             mime = item.get("mime_type", "")
-            if mime.startswith("application/vnd.google-apps."):
+            is_gdoc = mime.startswith("application/vnd.google-apps.")
+            if is_gdoc:
                 size = 380
+                file_mode = 0o755
             else:
                 size = item.get("size") or 0
+                file_mode = 0o644
 
             return {
-                "st_mode": stat.S_IFREG | 0o644,
+                "st_mode": stat.S_IFREG | file_mode,
                 "st_nlink": 1,
                 "st_size": size,
+                "st_uid": uid,
+                "st_gid": gid,
                 "st_ctime": mtime,
                 "st_mtime": mtime,
                 "st_atime": mtime
@@ -120,11 +131,43 @@ class GoogleDriveFUSE(Operations):
 
         dirents = [".", ".."]
         children = self.db.get_children(item["id"])
+        # On-demand folder hydration if directory appears empty and hasn't been fetched yet
+        if not children and item["id"] not in self._hydrated_dirs and hasattr(self.api, "list_files"):
+            self._hydrated_dirs.add(item["id"])
+            try:
+                resp = self.api.list_files(q=f"'{item['id']}' in parents and trashed = false", page_size=200)
+                files = resp.get("files", [])
+                if files:
+                    now = int(time.time())
+                    batch = []
+                    for f in files:
+                        is_dir = 1 if f.get("mimeType") == "application/vnd.google-apps.folder" else 0
+                        batch.append({
+                            "id": f["id"],
+                            "account_id": self.account_id,
+                            "name": f["name"],
+                            "parent_id": item["id"],
+                            "mime_type": f.get("mimeType", ""),
+                            "is_directory": is_dir,
+                            "size": int(f.get("size", 0)),
+                            "md5_checksum": f.get("md5Checksum", ""),
+                            "modified_time": now,
+                            "created_time": now,
+                            "is_pinned": 0,
+                            "is_trashed": 0,
+                            "sync_status": "online_only",
+                            "local_cache_path": None
+                        })
+                    self.db.upsert_items_batch(batch)
+                    children = self.db.get_children(item["id"])
+            except Exception:
+                pass
+
         for child in children:
             name = child["name"]
-            # Append .desktop to Google Docs so Linux launches them in browser
+            # Append .desktop to Google Docs/Sheets/Slides (excluding directories)
             mime = child.get("mime_type", "")
-            if mime.startswith("application/vnd.google-apps.") and not name.endswith(".desktop"):
+            if not child.get("is_directory") and mime.startswith("application/vnd.google-apps.") and not name.endswith(".desktop"):
                 name = f"{name}.desktop"
             dirents.append(name)
 
@@ -324,10 +367,14 @@ Categories=Office;{category};
 
 def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False):
     """Mount the Google Drive FUSE filesystem on Ubuntu."""
+    import subprocess
+    subprocess.run(["fusermount3", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
+    subprocess.run(["fusermount", "-uz", mount_point], stderr=subprocess.DEVNULL, check=False)
     os.makedirs(mount_point, exist_ok=True)
     fs = GoogleDriveFUSE(db, cache_manager, api, account_id)
     print(f"[VFS] Montando Google Drive em: {mount_point}")
     try:
-        FUSE(fs, mount_point, nothreads=False, foreground=foreground, allow_other=False)
+        if FUSE is not None:
+            FUSE(fs, mount_point, nothreads=False, foreground=foreground, allow_other=False)
     except Exception as e:
         print(f"[VFS] Erro ao montar FUSE: {e}")

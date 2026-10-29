@@ -77,6 +77,16 @@ chmod +x "${INSTALL_DIR}/gdrive-cli"
 chmod +x "${INSTALL_DIR}/gdrive-doc-launcher"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${INSTALL_DIR}"
 
+# Registrar commit atual para evitar re-download desnecessário pelo GitHubUpdater
+if command -v git >/dev/null 2>&1 && [ -d "${SCRIPT_DIR}/.git" ]; then
+    CURRENT_SHA=$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)
+    if [ -n "${CURRENT_SHA}" ]; then
+        mkdir -p "${USER_HOME}/.config/google-drive-linux"
+        echo "${CURRENT_SHA}" > "${USER_HOME}/.config/google-drive-linux/last_commit.sha"
+        chown -R "${TARGET_USER}:${TARGET_USER}" "${USER_HOME}/.config/google-drive-linux"
+    fi
+fi
+
 echo -e "${BLUE}[3/6] Criando atalhos no PATH do sistema (/usr/local/bin)...${NC}"
 ln -sf "${INSTALL_DIR}/gdrive-cli" /usr/local/bin/gdrive-cli
 ln -sf "${INSTALL_DIR}/gdrive-doc-launcher" /usr/local/bin/gdrive-doc-launcher

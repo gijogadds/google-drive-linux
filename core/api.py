@@ -4,8 +4,10 @@ Handles metadata fetching, chunked range downloads (for FUSE streaming), and res
 """
 import os
 import json
+import time
 import urllib.parse
 import urllib.request
+import urllib.error
 import io
 from typing import Optional, Dict, Any, List, Generator
 
@@ -30,18 +32,32 @@ class DriveAPI:
             headers.update(extra_headers)
         return headers
 
+    def _request_json(self, url: str, timeout: int = 15) -> Optional[Dict[str, Any]]:
+        for attempt in range(4):
+            req = urllib.request.Request(url, headers=self._get_headers())
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code == 401 and attempt == 0:
+                    self.auth_manager.refresh_access_token(self.account_id)
+                    continue
+                if e.code in (403, 429, 500, 502, 503) and attempt < 3:
+                    time.sleep(1.5 * (2 ** attempt))
+                    continue
+                print(f"[API] HTTP {e.code} em {url.split('?')[0]}: {e}")
+                return None
+            except Exception as e:
+                print(f"[API] Erro em {url.split('?')[0]}: {e}")
+                return None
+        return None
+
     def get_about(self) -> Optional[Dict[str, Any]]:
         url = f"{DRIVE_API_BASE}/about?fields=storageQuota,user"
-        req = urllib.request.Request(url, headers=self._get_headers())
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            print(f"[API] Error get_about: {e}")
-            return None
+        return self._request_json(url, timeout=10)
 
     def list_files(self, q: str = "trashed = false", page_size: int = 100, page_token: Optional[str] = None) -> Dict[str, Any]:
-        fields = "nextPageToken, files(id, name, mimeType, parents, size, md5Checksum, modifiedTime, createdTime, trashed, capabilities)"
+        fields = "nextPageToken,files(id,name,mimeType,parents,size,md5Checksum,modifiedTime,createdTime,trashed,capabilities)"
         params = {
             "q": q,
             "pageSize": page_size,
@@ -53,24 +69,14 @@ class DriveAPI:
             params["pageToken"] = page_token
 
         url = f"{DRIVE_API_BASE}/files?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(url, headers=self._get_headers())
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            print(f"[API] Error list_files: {e}")
-            return {"files": []}
+        res = self._request_json(url, timeout=15)
+        return res if res is not None else {"files": []}
 
     def get_file_metadata(self, file_id: str) -> Optional[Dict[str, Any]]:
-        fields = "id, name, mimeType, parents, size, md5Checksum, modifiedTime, createdTime, trashed, webViewLink"
-        url = f"{DRIVE_API_BASE}/files/{file_id}?fields={fields}&supportsAllDrives=true"
-        req = urllib.request.Request(url, headers=self._get_headers())
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            print(f"[API] Error get_file_metadata for {file_id}: {e}")
-            return None
+        fields = "id,name,mimeType,parents,size,md5Checksum,modifiedTime,createdTime,trashed,webViewLink"
+        params = {"fields": fields, "supportsAllDrives": "true"}
+        url = f"{DRIVE_API_BASE}/files/{urllib.parse.quote(file_id)}?{urllib.parse.urlencode(params)}"
+        return self._request_json(url, timeout=10)
 
     def read_range(self, file_id: str, offset: int, length: int) -> bytes:
         """Read a specific byte range of a file (Crucial for FUSE streaming)."""

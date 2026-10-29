@@ -5,10 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=-/bin/sh -c 'fusermount3 -uz "$HOME/GoogleDrive" 2>/dev/null || fusermount -uz "$HOME/GoogleDrive" 2>/dev/null || true'
 ExecStart=/opt/google-drive-linux/main.py --daemon
+ExecStopPost=-/bin/sh -c 'fusermount3 -uz "$HOME/GoogleDrive" 2>/dev/null || fusermount -uz "$HOME/GoogleDrive" 2>/dev/null || true'
 Restart=on-failure
 RestartSec=5s
 Environment=PYTHONUNBUFFERED=1
+PassEnvironment=DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 
 [Install]
 WantedBy=default.target

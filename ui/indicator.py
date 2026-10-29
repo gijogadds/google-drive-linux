@@ -201,3 +201,7 @@ class DriveTrayIndicator:
     def run(self):
         if HAS_GTK:
             Gtk.main()
+        else:
+            import time
+            while True:
+                time.sleep(5)

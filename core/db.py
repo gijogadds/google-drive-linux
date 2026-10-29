@@ -3,6 +3,7 @@ Google Drive for Linux - SQLite Metadata & Sync State Database
 Replicates the architecture found in Google Drive's internal metadata_sqlite_db.
 """
 import sqlite3
+import contextlib
 import time
 import os
 from typing import Optional, List, Dict, Any
@@ -15,13 +16,17 @@ class MetadataDB:
         self.db_path = db_path
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def _get_connection(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA foreign_keys=ON;")
-        return conn
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+            yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -106,24 +111,34 @@ class MetadataDB:
 
     # --- Item CRUD ---
     def upsert_item(self, item_data: Dict[str, Any]):
+        self.upsert_items_batch([item_data])
+
+    def upsert_items_batch(self, items_list: List[Dict[str, Any]]):
+        if not items_list:
+            return
+        now = int(time.time())
         defaults = {
             "account_id": "",
             "mime_type": "",
             "is_directory": 0,
             "size": 0,
             "md5_checksum": "",
-            "modified_time": int(time.time()),
-            "created_time": int(time.time()),
+            "modified_time": now,
+            "created_time": now,
             "is_pinned": 0,
             "is_trashed": 0,
             "sync_status": "online_only",
             "local_cache_path": None
         }
-        params = defaults.copy()
-        params.update(item_data)
+        batch = []
+        for item_data in items_list:
+            params = defaults.copy()
+            params.update(item_data)
+            batch.append(params)
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.executemany("""
             INSERT INTO items (
                 id, account_id, name, parent_id, mime_type, is_directory,
                 size, md5_checksum, modified_time, created_time,
@@ -144,7 +159,7 @@ class MetadataDB:
                 is_trashed=excluded.is_trashed,
                 sync_status=CASE WHEN items.is_pinned=1 THEN 'pinned' ELSE excluded.sync_status END,
                 local_cache_path=coalesce(items.local_cache_path, excluded.local_cache_path);
-            """, params)
+            """, batch)
             conn.commit()
 
     def get_item(self, item_id: str) -> Optional[Dict[str, Any]]:

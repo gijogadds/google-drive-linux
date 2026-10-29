@@ -262,6 +262,13 @@ class GoogleDriveDaemon:
     def _handle_shutdown(self, signum, frame):
         print("\n[Encerrando] Desmontando sistema de arquivos e finalizando threads...")
         self.running = False
+        mount_pt = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
+        try:
+            import subprocess
+            subprocess.run(["fusermount3", "-uz", mount_pt], stderr=subprocess.DEVNULL, check=False)
+            subprocess.run(["fusermount", "-uz", mount_pt], stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            pass
         if os.path.exists(IPC_SOCKET_PATH):
             try:
                 os.unlink(IPC_SOCKET_PATH)

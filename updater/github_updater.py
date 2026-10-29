@@ -157,6 +157,8 @@ class GitHubUpdater(threading.Thread):
                             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                             with zf.open(member) as src, open(dest_path, "wb") as dst:
                                 shutil.copyfileobj(src, dst)
+                            if rel_path in ("main.py", "gdrive-cli", "gdrive-doc-launcher", "install.sh"):
+                                os.chmod(dest_path, 0o755)
 
             # Update local commit stamp if present
             if "sha" in update_info:
