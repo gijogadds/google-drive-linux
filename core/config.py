@@ -42,7 +42,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_nautilus_integration": True,
     "enable_mcp_server": True,
     "start_at_login": True,
-    "notifications_enabled": True
+    "notifications_enabled": True,
+    "docs_engine": "native"
 }
 
 
