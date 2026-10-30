@@ -7,6 +7,7 @@ import os
 import sys
 import glob
 import json
+import urllib.parse
 import errno
 import stat
 import time
