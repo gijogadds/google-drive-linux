@@ -493,23 +493,7 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
 
     url = get_doc_url(raw_target, doc_type, email=email)
 
-    # 1. First priority: Check if user has Google Chrome / Chromium with an existing logged-in profile
-    browser = find_browser_for_app_mode()
-    prof_dir = None
-    if browser:
-        prof_dir, _ = find_chrome_profile(target_email=email, target_gaia_id=acc_id)
-
-    # If Chrome/Chromium is installed, open in dedicated app window using that account's profile (no login required!)
-    if browser:
-        cmd = [browser]
-        if prof_dir:
-            cmd.append(f"--profile-directory={prof_dir}")
-        cmd.append(f"--app={url}")
-        print(f"[DocLauncher] Abrindo documento no perfil '{prof_dir or 'Default'}' ({email or 'ativo'}): {url}")
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return
-
-    # 2. Fallback: If no Chromium browser is installed, launch native GTK3 + WebKit2 window with account-isolated session
+    # Launch in background process if requested
     if background:
         launcher_bin = "/usr/local/bin/gdrive-doc-launcher"
         if not os.path.exists(launcher_bin):
@@ -518,16 +502,17 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
                 "gdrive-doc-launcher",
             )
         subprocess.Popen(
-            [sys.executable, launcher_bin, f"--type={doc_type}", url, title],
+            [sys.executable, launcher_bin, f"--type={doc_type}", raw_target, title],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         return
 
+    # Run as native standalone application window (Google Planilhas / Docs / Slides)
     try:
         _run_native_webkit_app(url, doc_type, initial_title=title, account_id=acc_id, email=email)
     except Exception as e:
-        print(f"[DocLauncher] Aviso ao iniciar janela nativa WebKit2 ({e}), abrindo via xdg-open.")
+        print(f"[DocLauncher] Erro ao iniciar janela nativa WebKit2 ({e}), abrindo via xdg-open.")
         subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
