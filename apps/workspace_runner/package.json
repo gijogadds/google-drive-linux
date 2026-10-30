@@ -1,0 +1,6 @@
+{
+  "name": "google-workspace-runner",
+  "version": "1.0.0",
+  "description": "Embedded Native Google Workspace Runner for Linux",
+  "main": "main.js"
+}

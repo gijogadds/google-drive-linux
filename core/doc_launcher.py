@@ -478,10 +478,86 @@ def _run_native_webkit_app(url: str, doc_type: str, initial_title: str = "", acc
     return True
 
 
+def _launch_embedded_runner(url: str, doc_type: str, title: str, account_id: str, email: str, background: bool = False) -> bool:
+    """
+    Launch the embedded standalone Google Workspace runner (Chromium engine with offline support).
+    Returns True if successfully launched, False if embedded runner is unavailable.
+    """
+    runtime_bin = "/opt/google-drive-linux/runtime/electron"
+    runner_script = "/opt/google-drive-linux/apps/workspace_runner/main.js"
+
+    # Also check repo path if running from repo
+    if not os.path.exists(runtime_bin) or not os.path.exists(runner_script):
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        alt_runtime = os.path.join(repo_root, "runtime", "electron")
+        alt_runner = os.path.join(repo_root, "apps", "workspace_runner", "main.js")
+        if os.path.exists(runtime_bin):
+            pass
+        elif os.path.exists(alt_runtime):
+            runtime_bin = alt_runtime
+        else:
+            return False
+
+        if os.path.exists(runner_script):
+            pass
+        elif os.path.exists(alt_runner):
+            runner_script = alt_runner
+        else:
+            return False
+
+    cmd = [
+        runtime_bin,
+        "--no-sandbox",
+        runner_script,
+        f"--doc-url={url}",
+        f"--doc-type={doc_type}",
+        f"--doc-title={title}",
+        f"--doc-account={account_id}",
+        f"--doc-email={email}",
+    ]
+
+    # Check for seed cookies from native session if available
+    safe_id = account_id if account_id else "default"
+    webkit_cookies = os.path.expanduser(f"~/.config/google-drive-linux/workspace_webkit/acc_{safe_id}/cookies.sqlite")
+    if os.path.exists(webkit_cookies):
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{webkit_cookies}?mode=ro", uri=True)
+            cur = conn.cursor()
+            cur.execute("SELECT name, value, host, path, expiry, isSecure, isHttpOnly FROM moz_cookies")
+            cookies = []
+            for c_name, c_val, c_host, c_path, c_exp, c_sec, c_http in cur.fetchall():
+                cookies.append({
+                    "name": c_name,
+                    "value": c_val,
+                    "domain": c_host,
+                    "path": c_path,
+                    "expirationDate": c_exp,
+                    "secure": bool(c_sec),
+                    "httpOnly": bool(c_http)
+                })
+            conn.close()
+            if cookies:
+                seed_path = f"/tmp/gdrive_seed_cookies_{safe_id}.json"
+                with open(seed_path, "w", encoding="utf-8") as f:
+                    json.dump(cookies, f)
+                cmd.append(f"--doc-cookies={seed_path}")
+        except Exception:
+            pass
+
+    if background:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(cmd)
+    return True
+
+
 def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background: bool = False, initial_title: str = "", force_account_id: str = ""):
     """
     Launch Google Docs, Sheets, or Slides (or a local .gdoc/.gsheet/.gslides file)
     routed directly to the corresponding connected account's active session.
+    Prefers the embedded standalone Chromium runner for full offline support,
+    falling back to native GTK3 WebKit2.
     """
     raw_target = (identifier or "").strip()
     if raw_target.startswith("file://"):
@@ -516,7 +592,14 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
 
     url = get_doc_url(raw_target, doc_type, email=email)
 
-    # Launch in background process if requested
+    # 1. Try launching with the embedded standalone runtime (Chromium engine with Offline support)
+    try:
+        if _launch_embedded_runner(url, doc_type, title, acc_id, email, background=background):
+            return True
+    except Exception as e:
+        print(f"[DocLauncher] Aviso: embedded runner indisponível ({e}), tentando WebKit2.")
+
+    # 2. Launch in background process if requested
     if background:
         launcher_bin = "/usr/local/bin/gdrive-doc-launcher"
         if not os.path.exists(launcher_bin):
@@ -531,12 +614,13 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
         )
         return
 
-    # Run as native standalone application window (Google Planilhas / Docs / Slides)
+    # 3. Fallback: Run as native standalone application window (GTK3 + WebKit2)
     try:
         _run_native_webkit_app(url, doc_type, initial_title=title, account_id=acc_id, email=email)
     except Exception as e:
         print(f"[DocLauncher] Erro ao iniciar janela nativa WebKit2 ({e}), abrindo via xdg-open.")
         subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 
 
 if __name__ == "__main__":

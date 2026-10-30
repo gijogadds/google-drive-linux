@@ -26,6 +26,8 @@ venv/
 ENV/
 
 # Application runtime files
+runtime/
+apps/workspace_runner/node_modules/
 metadata.db*
 accounts.json
 config.json
