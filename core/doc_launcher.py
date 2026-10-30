@@ -295,39 +295,13 @@ def _run_native_webkit_app(url: str, doc_type: str, initial_title: str = "", acc
     header = Gtk.HeaderBar()
     header.set_show_close_button(True)
     header.set_title(initial_title if initial_title else app_title)
-    acc_sub = f"{app_title} • {email}" if email else app_title
-    header.set_subtitle(acc_sub)
 
     if os.path.exists(icon_path):
         try:
-            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_path, 24, 24, True)
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_path, 20, 20, True)
             header.pack_start(Gtk.Image.new_from_pixbuf(pb))
         except Exception:
             pass
-
-    btn_back = Gtk.Button.new_from_icon_name("go-previous-symbolic", Gtk.IconSize.BUTTON)
-    btn_back.set_tooltip_text("Voltar")
-    header.pack_start(btn_back)
-
-    btn_fwd = Gtk.Button.new_from_icon_name("go-next-symbolic", Gtk.IconSize.BUTTON)
-    btn_fwd.set_tooltip_text("Avançar")
-    header.pack_start(btn_fwd)
-
-    btn_reload = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
-    btn_reload.set_tooltip_text("Recarregar documento")
-    header.pack_start(btn_reload)
-
-    btn_home = Gtk.Button(label=f"🏠 Início ({app_title.split()[-1]})")
-    btn_home.set_tooltip_text(f"Ir para a tela inicial do {app_title}")
-    header.pack_start(btn_home)
-
-    btn_ext = Gtk.Button(label="🌐 Navegador")
-    btn_ext.set_tooltip_text("Abrir este documento no navegador externo")
-    header.pack_end(btn_ext)
-
-    btn_new = Gtk.Button(label="➕ Novo")
-    btn_new.set_tooltip_text(f"Criar novo arquivo no {app_title}")
-    header.pack_end(btn_new)
 
     window.set_titlebar(header)
 
@@ -371,18 +345,67 @@ def _run_native_webkit_app(url: str, doc_type: str, initial_title: str = "", acc
     vbox.pack_start(webview, True, True, 0)
     window.add(vbox)
 
-    btn_back.connect("clicked", lambda _: webview.go_back() if webview.can_go_back() else None)
-    btn_fwd.connect("clicked", lambda _: webview.go_forward() if webview.can_go_forward() else None)
-    btn_reload.connect("clicked", lambda _: webview.reload())
-    btn_home.connect("clicked", lambda _: webview.load_uri(get_doc_url(doc_type, doc_type, email=email)))
-    btn_new.connect("clicked", lambda _: webview.load_uri(get_doc_url(new_url, doc_type, email=email)))
-    btn_ext.connect("clicked", lambda _: subprocess.Popen(["xdg-open", webview.get_uri() or url]))
+    # Native application keyboard shortcuts
+    def _on_key_press(win, event):
+        # F5 -> Reload
+        if event.keyval == Gdk.KEY_F5:
+            webview.reload()
+            return True
+        # F11 -> Toggle Fullscreen
+        if event.keyval == Gdk.KEY_F11:
+            if getattr(win, "_is_fullscreen", False):
+                win.unfullscreen()
+                win._is_fullscreen = False
+            else:
+                win.fullscreen()
+                win._is_fullscreen = True
+            return True
+        # Ctrl+R -> Reload
+        if (event.state & Gdk.ModifierType.CONTROL_MASK) and event.keyval in (Gdk.KEY_r, Gdk.KEY_R):
+            if event.state & Gdk.ModifierType.SHIFT_MASK:
+                webview.reload_bypass_cache()
+            else:
+                webview.reload()
+            return True
+        # Ctrl+W or Ctrl+Q -> Close Window
+        if (event.state & Gdk.ModifierType.CONTROL_MASK) and event.keyval in (Gdk.KEY_w, Gdk.KEY_W, Gdk.KEY_q, Gdk.KEY_Q):
+            win.close()
+            return True
+        return False
+
+    window._is_fullscreen = False
+    window.connect("key-press-event", _on_key_press)
+
+    # Allow Google Docs/Sheets native context menus (cell options, insert, cut/copy/paste)
+    def _on_context_menu(wv, context_menu, event, hit_test_result):
+        return True
+
+    webview.connect("context-menu", _on_context_menu)
+
+    # Open external links in default browser instead of navigating the editor away
+    def _on_decide_policy(wv, decision, decision_type):
+        if decision_type == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
+            action = decision.get_navigation_action()
+            req = action.get_request()
+            target_uri = req.get_uri() if req else ""
+            if action.get_navigation_type() == WebKit2.NavigationType.LINK_CLICKED and target_uri:
+                if not any(h in target_uri for h in ("docs.google.com", "accounts.google.com", "drive.google.com")):
+                    subprocess.Popen(["xdg-open", target_uri])
+                    decision.ignore()
+                    return True
+        return False
+
+    webview.connect("decide-policy", _on_decide_policy)
 
     def _on_title_changed(wv, _param):
         t = wv.get_title()
         if t:
-            header.set_title(t)
-            window.set_title(f"{t} - {app_title}")
+            clean = t.strip()
+            for suffix in (" - Google Sheets", " - Google Docs", " - Google Slides"):
+                if clean.endswith(suffix):
+                    clean = clean[:-len(suffix)].strip()
+            header.set_title(clean)
+            window.set_title(clean)
 
     def _on_progress_changed(wv, _param):
         prog = wv.get_estimated_load_progress()
