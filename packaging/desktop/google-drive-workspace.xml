@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.google-apps.document">
+    <comment>Documento do Google Docs</comment>
+    <icon name="google-docs"/>
+    <generic-icon name="google-docs"/>
+    <magic priority="95">
+      <match type="string" value="{&quot;gd_type&quot;: &quot;doc&quot;" offset="0"/>
+      <match type="string" value="{&quot;gd_type&quot;:&quot;doc&quot;" offset="0"/>
+    </magic>
+    <glob pattern="*.gdoc" weight="90"/>
+    <glob pattern="*.gform" weight="90"/>
+  </mime-type>
+
+  <mime-type type="application/vnd.google-apps.spreadsheet">
+    <comment>Planilha do Google Sheets</comment>
+    <icon name="google-sheets"/>
+    <generic-icon name="google-sheets"/>
+    <magic priority="95">
+      <match type="string" value="{&quot;gd_type&quot;: &quot;sheet&quot;" offset="0"/>
+      <match type="string" value="{&quot;gd_type&quot;:&quot;sheet&quot;" offset="0"/>
+    </magic>
+    <glob pattern="*.gsheet" weight="90"/>
+  </mime-type>
+
+  <mime-type type="application/vnd.google-apps.presentation">
+    <comment>Apresentação do Google Slides</comment>
+    <icon name="google-slides"/>
+    <generic-icon name="google-slides"/>
+    <magic priority="95">
+      <match type="string" value="{&quot;gd_type&quot;: &quot;slide&quot;" offset="0"/>
+      <match type="string" value="{&quot;gd_type&quot;:&quot;slide&quot;" offset="0"/>
+    </magic>
+    <glob pattern="*.gslides" weight="90"/>
+  </mime-type>
+</mime-info>

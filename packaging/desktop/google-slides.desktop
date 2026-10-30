@@ -1,0 +1,19 @@
+[Desktop Entry]
+Version=1.0
+Name=Google Slides
+GenericName=Apresentações
+Comment=Crie e edite apresentações do Google Slides em janela de aplicativo independente
+Exec=/usr/local/bin/gdrive-doc-launcher --type=slide %f
+Icon=google-slides
+Terminal=false
+Type=Application
+Categories=Office;Presentation;
+MimeType=application/vnd.google-apps.presentation;application/x-google-slides;
+StartupNotify=true
+StartupWMClass=google-slides
+Keywords=Google;Slides;Apresentações;PowerPoint;Drive;
+Actions=NewPresentation;
+
+[Desktop Action NewPresentation]
+Name=Nova Apresentação em Branco
+Exec=/usr/local/bin/gdrive-doc-launcher --new-slide slide

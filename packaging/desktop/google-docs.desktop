@@ -1,0 +1,19 @@
+[Desktop Entry]
+Version=1.0
+Name=Google Docs
+GenericName=Editor de Textos
+Comment=Crie e edite documentos do Google Docs em janela de aplicativo independente
+Exec=/usr/local/bin/gdrive-doc-launcher --type=doc %f
+Icon=google-docs
+Terminal=false
+Type=Application
+Categories=Office;WordProcessor;
+MimeType=application/vnd.google-apps.document;application/x-google-docs;
+StartupNotify=true
+StartupWMClass=google-docs
+Keywords=Google;Docs;Documentos;Word;Texto;Drive;
+Actions=NewDocument;
+
+[Desktop Action NewDocument]
+Name=Novo Documento em Branco
+Exec=/usr/local/bin/gdrive-doc-launcher --new-doc doc

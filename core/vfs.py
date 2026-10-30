@@ -6,6 +6,7 @@ Compatible with Linux libfuse3 via fusepy or pyfuse3.
 import os
 import sys
 import glob
+import json
 import errno
 import stat
 import time
@@ -73,6 +74,47 @@ class GoogleDriveFUSE(Operations):
                 return None
         return None
 
+    @staticmethod
+    def _get_gdoc_extension(mime: str) -> str:
+        if "spreadsheet" in mime:
+            return ".gsheet"
+        if "presentation" in mime:
+            return ".gslides"
+        if "form" in mime:
+            return ".gform"
+        return ".gdoc"
+
+    def _build_gdoc_payload(self, item: Dict[str, Any]) -> bytes:
+        mime = item.get("mime_type", "")
+        doc_type = "doc"
+        if "spreadsheet" in mime:
+            doc_type = "sheet"
+        elif "presentation" in mime:
+            doc_type = "slide"
+        elif "form" in mime:
+            doc_type = "form"
+
+        item_id = item.get("id", "")
+        if doc_type == "doc":
+            url = f"https://docs.google.com/document/d/{item_id}/edit"
+        elif doc_type == "sheet":
+            url = f"https://docs.google.com/spreadsheets/d/{item_id}/edit"
+        elif doc_type == "slide":
+            url = f"https://docs.google.com/presentation/d/{item_id}/edit"
+        elif doc_type == "form":
+            url = f"https://docs.google.com/forms/d/{item_id}/edit"
+        else:
+            url = f"https://drive.google.com/open?id={item_id}"
+
+        payload = {
+            "gd_type": doc_type,
+            "doc_id": item_id,
+            "url": url,
+            "title": item.get("name", ""),
+            "account_id": self.account_id,
+        }
+        return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
     def _resolve_item(self, path: str) -> Optional[Dict[str, Any]]:
         """Resolve a POSIX path (e.g. /Folder/Subfolder/file.pdf) to an item record in SQLite."""
         if path in ("/", ""):
@@ -93,10 +135,13 @@ class GoogleDriveFUSE(Operations):
         item = None
 
         for part in parts:
-            # Handle Google Docs extension virtual mapping
+            # Handle Google Docs/Sheets/Slides virtual extension mapping (.gdoc, .gsheet, .gslides, .gform, .desktop)
             real_name = part
-            if part.endswith(".desktop") and not part.startswith("."):
-                real_name = part[:-8]
+            if not part.startswith("."):
+                for ext in (".gdoc", ".gsheet", ".gslides", ".gform", ".desktop"):
+                    if part.endswith(ext):
+                        real_name = part[:-len(ext)]
+                        break
 
             item = self.db.get_item_by_path(current_parent, real_name, account_id=self.account_id)
             if not item:
@@ -133,12 +178,12 @@ class GoogleDriveFUSE(Operations):
                 "st_atime": mtime
             }
         else:
-            # If it's a native Google doc, synthesize desktop launcher size
+            # If it's a native Google Workspace document, compute exact JSON descriptor size
             mime = item.get("mime_type", "")
             is_gdoc = mime.startswith("application/vnd.google-apps.")
             if is_gdoc:
-                size = 380
-                file_mode = 0o755
+                size = len(self._build_gdoc_payload(item))
+                file_mode = 0o644
             else:
                 size = item.get("size") or 0
                 file_mode = 0o644
@@ -195,10 +240,12 @@ class GoogleDriveFUSE(Operations):
 
         for child in children:
             name = child["name"]
-            # Append .desktop to Google Docs/Sheets/Slides (excluding directories)
+            # Append native Google Workspace extension (.gdoc, .gsheet, .gslides, .gform) so Linux MIME opens the installed app
             mime = child.get("mime_type", "")
-            if not child.get("is_directory") and mime.startswith("application/vnd.google-apps.") and not name.endswith(".desktop"):
-                name = f"{name}.desktop"
+            if not child.get("is_directory") and mime.startswith("application/vnd.google-apps."):
+                ext = self._get_gdoc_extension(mime)
+                if not name.endswith(ext):
+                    name = f"{name}{ext}"
             dirents.append(name)
 
         return dirents
@@ -233,38 +280,10 @@ class GoogleDriveFUSE(Operations):
             return vdata[offset:offset + size]
 
         mime = item.get("mime_type", "")
-        # Google Docs synthetic .desktop launcher content (Standalone App Window mode)
+        # Google Docs/Sheets/Slides native JSON descriptor (associated with installed Google Workspace apps)
         if mime.startswith("application/vnd.google-apps."):
-            doc_type = "doc"
-            icon_name = "docs.png"
-            wm_class = "google-docs"
-            category = "WordProcessor"
-
-            if "spreadsheet" in mime:
-                doc_type = "sheet"
-                icon_name = "sheets.png"
-                wm_class = "google-sheets"
-                category = "Spreadsheet"
-            elif "presentation" in mime:
-                doc_type = "slide"
-                icon_name = "slides.png"
-                wm_class = "google-slides"
-                category = "Presentation"
-
-            icon_path = f"/opt/google-drive-linux/assets/icons/{icon_name}"
-            desktop_content = f"""[Desktop Entry]
-Version=1.0
-Type=Application
-Name={item['name']}
-Comment=Google {doc_type.capitalize()} (Janela de Aplicativo)
-Exec=/usr/local/bin/gdrive-doc-launcher {item['id']} {doc_type}
-Icon={icon_path}
-Terminal=false
-StartupNotify=true
-StartupWMClass={wm_class}
-Categories=Office;{category};
-""".encode("utf-8")
-            return desktop_content[offset:offset + size]
+            gdoc_bytes = self._build_gdoc_payload(item)
+            return gdoc_bytes[offset:offset + size]
 
         total_size = item.get("size") or 0
         # Stream slice via Chunked Sparse Cache Manager

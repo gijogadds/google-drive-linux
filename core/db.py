@@ -252,8 +252,17 @@ class MetadataDB:
                 name = row["name"]
                 if not parts:
                     mime = row["mime_type"] or ""
-                    if not row["is_directory"] and mime.startswith("application/vnd.google-apps.") and not name.endswith(".desktop"):
-                        name = f"{name}.desktop"
+                    if not row["is_directory"] and mime.startswith("application/vnd.google-apps."):
+                        if "spreadsheet" in mime:
+                            ext = ".gsheet"
+                        elif "presentation" in mime:
+                            ext = ".gslides"
+                        elif "form" in mime:
+                            ext = ".gform"
+                        else:
+                            ext = ".gdoc"
+                        if not name.endswith(ext):
+                            name = f"{name}{ext}"
                 parts.append(name)
                 curr_id = row["parent_id"]
         parts.reverse()

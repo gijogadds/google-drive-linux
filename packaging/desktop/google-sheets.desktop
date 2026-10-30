@@ -1,0 +1,19 @@
+[Desktop Entry]
+Version=1.0
+Name=Google Sheets
+GenericName=Planilhas
+Comment=Crie e edite planilhas do Google Sheets em janela de aplicativo independente
+Exec=/usr/local/bin/gdrive-doc-launcher --type=sheet %f
+Icon=google-sheets
+Terminal=false
+Type=Application
+Categories=Office;Spreadsheet;
+MimeType=application/vnd.google-apps.spreadsheet;application/x-google-sheets;
+StartupNotify=true
+StartupWMClass=google-sheets
+Keywords=Google;Sheets;Planilhas;Excel;Tabela;Drive;
+Actions=NewSpreadsheet;
+
+[Desktop Action NewSpreadsheet]
+Name=Nova Planilha em Branco
+Exec=/usr/local/bin/gdrive-doc-launcher --new-sheet sheet

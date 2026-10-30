@@ -450,22 +450,90 @@ def ensure_directories():
             except OSError:
                 pass
 
-    # Ensure user-level .desktop and icon exist so GNOME Shell (Wayland/X11) Dock & Lock Screen always show the Drive icon
+    # Ensure Google Drive, Google Docs, Google Sheets, and Google Slides desktop apps, icons, and MIME associations are installed
+    ensure_workspace_apps_installed()
+
+
+def ensure_workspace_apps_installed():
+    """
+    Install standalone desktop launchers for Google Drive, Google Docs, Google Sheets, and Google Slides,
+    along with their icons and MIME type associations (.gdoc, .gsheet, .gslides, .gform).
+    """
     try:
         import shutil
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        desktop_src = os.path.join(project_root, "packaging", "desktop", "google-drive.desktop")
-        icon_src = os.path.join(project_root, "assets", "icons", "drive_fs.png")
+        desktop_dir = os.path.join(project_root, "packaging", "desktop")
+        icons_dir = os.path.join(project_root, "assets", "icons")
+
         user_apps_dir = os.path.expanduser("~/.local/share/applications")
-        user_icons_dir = os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps")
-        if os.path.exists(desktop_src):
-            os.makedirs(user_apps_dir, exist_ok=True)
-            shutil.copy2(desktop_src, os.path.join(user_apps_dir, "google-drive.desktop"))
-        if os.path.exists(icon_src):
-            os.makedirs(user_icons_dir, exist_ok=True)
-            shutil.copy2(icon_src, os.path.join(user_icons_dir, "google-drive.png"))
-    except Exception:
-        pass
+        user_mime_pkg_dir = os.path.expanduser("~/.local/share/mime/packages")
+        os.makedirs(user_apps_dir, exist_ok=True)
+        os.makedirs(user_mime_pkg_dir, exist_ok=True)
+
+        # 1. Install .desktop launchers
+        needs_desktop_update = False
+        for dfile in ("google-drive.desktop", "google-docs.desktop", "google-sheets.desktop", "google-slides.desktop"):
+            src = os.path.join(desktop_dir, dfile)
+            dst = os.path.join(user_apps_dir, dfile)
+            if os.path.exists(src):
+                if not os.path.exists(dst) or os.path.getsize(src) != os.path.getsize(dst):
+                    needs_desktop_update = True
+                shutil.copy2(src, dst)
+
+        # 2. Install app and mimetype icons across themes
+        icon_mappings = [
+            ("drive_fs.png", "google-drive.png", None),
+            ("docs.png", "google-docs.png", "application-vnd.google-apps.document.png"),
+            ("sheets.png", "google-sheets.png", "application-vnd.google-apps.spreadsheet.png"),
+            ("slides.png", "google-slides.png", "application-vnd.google-apps.presentation.png"),
+        ]
+        for theme_name in ("hicolor", "Yaru", "Yaru-dark", "Adwaita"):
+            apps_icon_dir = os.path.expanduser(f"~/.local/share/icons/{theme_name}/256x256/apps")
+            mime_icon_dir = os.path.expanduser(f"~/.local/share/icons/{theme_name}/256x256/mimetypes")
+            os.makedirs(apps_icon_dir, exist_ok=True)
+            os.makedirs(mime_icon_dir, exist_ok=True)
+            for src_name, app_dst_name, mime_dst_name in icon_mappings:
+                src_path = os.path.join(icons_dir, src_name)
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, os.path.join(apps_icon_dir, app_dst_name))
+                    if mime_dst_name:
+                        shutil.copy2(src_path, os.path.join(mime_icon_dir, mime_dst_name))
+                        shutil.copy2(src_path, os.path.join(mime_icon_dir, app_dst_name))
+
+        # 3. Install and compile custom MIME definitions (.gdoc, .gsheet, .gslides)
+        mime_xml_src = os.path.join(desktop_dir, "google-drive-workspace.xml")
+        mime_xml_dst = os.path.join(user_mime_pkg_dir, "google-drive-workspace.xml")
+        mime_db_compiled = os.path.expanduser("~/.local/share/mime/application/vnd.google-apps.spreadsheet.xml")
+        if os.path.exists(mime_xml_src):
+            needs_mime_compile = (
+                not os.path.exists(mime_xml_dst)
+                or not os.path.exists(mime_db_compiled)
+                or os.path.getsize(mime_xml_src) != os.path.getsize(mime_xml_dst)
+            )
+            shutil.copy2(mime_xml_src, mime_xml_dst)
+            if needs_mime_compile or needs_desktop_update:
+                subprocess.run(
+                    ["update-mime-database", os.path.expanduser("~/.local/share/mime")],
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                subprocess.run(
+                    ["update-desktop-database", user_apps_dir],
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                for desktop_id, mtype in (
+                    ("google-docs.desktop", "application/vnd.google-apps.document"),
+                    ("google-sheets.desktop", "application/vnd.google-apps.spreadsheet"),
+                    ("google-slides.desktop", "application/vnd.google-apps.presentation"),
+                ):
+                    subprocess.run(
+                        ["xdg-mime", "default", desktop_id, mtype],
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+    except Exception as e:
+        print(f"[Config] Aviso ao configurar aplicativos Docs/Sheets/Slides: {e}")
 
 
 def load_config() -> Dict[str, Any]:
