@@ -89,13 +89,17 @@ class GoogleDriveHomeWindow:
         self._build_interface(window)
         window.show_all()
         self.window = window
+        self._last_recent_sig = None
+        self._last_header_sig = None
         self._refresh_live_ui()
-        GLib.timeout_add(1500, self._refresh_live_ui)
+        if not getattr(self, "_live_timer_id", None):
+            self._live_timer_id = GLib.timeout_add(1500, self._refresh_live_ui)
         window.present()
         GLib.idle_add(self._check_unconfigured_account_mounts)
 
     def _on_window_destroy(self, _widget):
         self.window = None
+        self._live_timer_id = None
 
     def _build_interface(self, window):
         assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "html")
@@ -755,8 +759,26 @@ class GoogleDriveHomeWindow:
             mount_pt = get_account_mount_point(self.config, active_acc_id or "", email=active_email)
             sync_mode_label = "Espelhar (Offline)" if self.config.get("sync_mode") == "mirror" else "Stream (Sob demanda)"
 
+            header_sig = (
+                round(fraction, 4),
+                pct_text,
+                is_paused,
+                is_syncing,
+                pending_ops,
+                phase,
+                last_file,
+                total_files,
+                total_dirs,
+                total_items,
+                mount_pt,
+                sync_mode_label,
+            )
+            header_changed = getattr(self, "_last_header_sig", None) != header_sig
+            if header_changed:
+                self._last_header_sig = header_sig
+
             # 1. Update Home Card 1 ("Status de sincronização")
-            if hasattr(self, "home_sync_subtitle_lbl"):
+            if header_changed and hasattr(self, "home_sync_subtitle_lbl"):
                 self.home_sync_progress.set_fraction(fraction)
                 self.home_sync_progress.set_text(pct_text)
                 self.home_sync_progress.show()
@@ -786,75 +808,82 @@ class GoogleDriveHomeWindow:
 
             # 2. Update Activity Tab Header & File List
             if hasattr(self, "act_status_lbl"):
-                self.act_progress.set_fraction(fraction)
-                self.act_progress.set_text(pct_text)
-                self.act_progress.show()
-                if is_paused:
-                    self.act_status_lbl.set_markup(f"<big><big><b>⏸️ Sincronização pausada ({pct:.1f}%)</b></big></big>")
-                elif is_syncing or pending_ops > 0:
-                    self.act_status_lbl.set_markup(
-                        f"<big><big><b>🔄 {GLib.markup_escape_text(phase)} ({pct:.1f}%)</b></big></big>"
-                    )
-                else:
-                    self.act_status_lbl.set_markup(
-                        f"<big><big><b>☁️ 100% Atualizado ({total_items} itens sincronizados)</b></big></big>"
+                if header_changed:
+                    self.act_progress.set_fraction(fraction)
+                    self.act_progress.set_text(pct_text)
+                    self.act_progress.show()
+                    if is_paused:
+                        self.act_status_lbl.set_markup(f"<big><big><b>⏸️ Sincronização pausada ({pct:.1f}%)</b></big></big>")
+                    elif is_syncing or pending_ops > 0:
+                        self.act_status_lbl.set_markup(
+                            f"<big><big><b>🔄 {GLib.markup_escape_text(phase)} ({pct:.1f}%)</b></big></big>"
+                        )
+                    else:
+                        self.act_status_lbl.set_markup(
+                            f"<big><big><b>☁️ 100% Atualizado ({total_items} itens sincronizados)</b></big></big>"
+                        )
+
+                    self.act_time_lbl.set_text(
+                        f"{total_files} arquivos • {total_dirs} pastas • Modo: {sync_mode_label} • Pasta: {mount_pt}"
                     )
 
-                self.act_time_lbl.set_text(
-                    f"{total_files} arquivos • {total_dirs} pastas • Modo: {sync_mode_label} • Pasta: {mount_pt}"
-                )
-
-                # Populate recent items list
+                # Populate recent items list only when items or sync state changed (prevents list flicker)
                 recent = []
                 if self.sync_worker and getattr(self.sync_worker, "recent_synced_items", None):
                     recent = list(self.sync_worker.recent_synced_items[:35])
                 if not recent:
                     recent = self.db.get_recent_items(limit=35, account_id=active_acc_id)
 
-                for child in self.act_list_box.get_children():
-                    self.act_list_box.remove(child)
+                recent_sig = (
+                    is_syncing,
+                    tuple((it.get("id"), it.get("name"), it.get("sync_status"), it.get("size")) for it in recent)
+                )
+                if getattr(self, "_last_recent_sig", None) != recent_sig:
+                    self._last_recent_sig = recent_sig
+                    for child in self.act_list_box.get_children():
+                        self.act_list_box.remove(child)
 
-                if recent:
-                    self.act_empty_box.hide()
-                    self.act_scroll.show()
-                    for idx, item in enumerate(recent):
-                        row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                        row_box.set_margin_top(5)
-                        row_box.set_margin_bottom(5)
-                        row_box.set_margin_start(4)
-                        row_box.set_margin_end(4)
+                    if recent:
+                        self.act_empty_box.hide()
+                        self.act_scroll.show()
+                        for idx, item in enumerate(recent):
+                            row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                            row_box.set_margin_top(5)
+                            row_box.set_margin_bottom(5)
+                            row_box.set_margin_start(4)
+                            row_box.set_margin_end(4)
 
-                        is_dir = bool(item.get("is_directory"))
-                        icon_prefix = "📁" if is_dir else "📄"
-                        name_str = item.get("name", "Sem nome")
-                        lbl_n = Gtk.Label(label=f"{icon_prefix}  {name_str}")
-                        lbl_n.set_alignment(0, 0.5)
-                        lbl_n.set_ellipsize(3)  # Pango.EllipsizeMode.END
-                        row_box.pack_start(lbl_n, True, True, 0)
+                            is_dir = bool(item.get("is_directory"))
+                            icon_prefix = "📁" if is_dir else "📄"
+                            name_str = item.get("name", "Sem nome")
+                            lbl_n = Gtk.Label(label=f"{icon_prefix}  {name_str}")
+                            lbl_n.set_alignment(0, 0.5)
+                            lbl_n.set_ellipsize(3)  # Pango.EllipsizeMode.END
+                            row_box.pack_start(lbl_n, True, True, 0)
 
-                        lbl_sz = Gtk.Label(label=self._format_size(int(item.get("size", 0)), is_dir))
-                        lbl_sz.set_size_request(130, -1)
-                        lbl_sz.set_alignment(0, 0.5)
-                        lbl_sz.set_opacity(0.8)
-                        row_box.pack_start(lbl_sz, False, False, 10)
+                            lbl_sz = Gtk.Label(label=self._format_size(int(item.get("size", 0)), is_dir))
+                            lbl_sz.set_size_request(130, -1)
+                            lbl_sz.set_alignment(0, 0.5)
+                            lbl_sz.set_opacity(0.8)
+                            row_box.pack_start(lbl_sz, False, False, 10)
 
-                        if is_syncing and idx < 3:
-                            st_text = "🔄 Sincronizando..."
-                        elif item.get("sync_status") == "synced" or item.get("sync_status") == "pinned":
-                            st_text = "✅ Sincronizado local"
-                        else:
-                            st_text = "☁️ Sincronizado (Stream)"
+                            if is_syncing and idx < 3:
+                                st_text = "🔄 Sincronizando..."
+                            elif item.get("sync_status") == "synced" or item.get("sync_status") == "pinned":
+                                st_text = "✅ Sincronizado local"
+                            else:
+                                st_text = "☁️ Sincronizado (Stream)"
 
-                        lbl_st = Gtk.Label(label=st_text)
-                        lbl_st.set_size_request(170, -1)
-                        lbl_st.set_alignment(0, 0.5)
-                        row_box.pack_start(lbl_st, False, False, 10)
+                            lbl_st = Gtk.Label(label=st_text)
+                            lbl_st.set_size_request(170, -1)
+                            lbl_st.set_alignment(0, 0.5)
+                            row_box.pack_start(lbl_st, False, False, 10)
 
-                        self.act_list_box.add(row_box)
-                    self.act_list_box.show_all()
-                else:
-                    self.act_scroll.hide()
-                    self.act_empty_box.show_all()
+                            self.act_list_box.add(row_box)
+                        self.act_list_box.show_all()
+                    else:
+                        self.act_scroll.hide()
+                        self.act_empty_box.show_all()
         except Exception as e:
             print(f"[UI] Erro ao atualizar status em tempo real: {e}")
 

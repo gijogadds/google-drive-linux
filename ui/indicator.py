@@ -35,6 +35,10 @@ class DriveTrayIndicator:
         self.on_open_home = on_open_home
         self.indicator = None
         self.menu = None
+        self.status_item = None
+        self.pause_item = None
+        self._last_account_emails = None
+        self._last_paused_state = None
 
         assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons")
         self.icon_active = os.path.join(assets_dir, "drive_logo_24px.svg")
@@ -53,11 +57,34 @@ class DriveTrayIndicator:
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.update_menu()
 
-        # Update periodic status in tray
+        # Update status text in place without replacing the menu object (prevents menu blinking)
         GLib.timeout_add_seconds(3, self._on_timer_tick)
 
     def _on_timer_tick(self):
-        self.update_menu()
+        if not HAS_GTK or self.menu is None:
+            return True
+        try:
+            accounts = self.db.get_accounts()
+            current_emails = tuple(a.get("email", "") for a in accounts)
+            is_paused = bool(self.sync_worker and self.sync_worker.paused)
+
+            # Rebuild menu structure only if connected accounts list changed
+            if current_emails != self._last_account_emails:
+                self.update_menu()
+                return True
+
+            # Update status label in place (no flicker!)
+            activity = self.sync_worker.current_activity if self.sync_worker else "Pronto"
+            new_status_text = f"Status: {activity}"
+            if self.status_item and self.status_item.get_label() != new_status_text:
+                self.status_item.set_label(new_status_text)
+
+            # Update pause/resume label in place if state changed
+            if self.pause_item and is_paused != self._last_paused_state:
+                self._last_paused_state = is_paused
+                self.pause_item.set_label("▶️ Retomar Sincronização" if is_paused else "⏸️ Pausar Sincronização")
+        except Exception:
+            pass
         return True
 
     def update_menu(self):
@@ -68,6 +95,7 @@ class DriveTrayIndicator:
 
         # 1. Accounts Header
         accounts = self.db.get_accounts()
+        self._last_account_emails = tuple(a.get("email", "") for a in accounts)
         if accounts:
             for acc in accounts:
                 acc_item = Gtk.MenuItem(label=f"👤 {acc.get('email', 'Conta Conectada')}")
@@ -80,9 +108,9 @@ class DriveTrayIndicator:
 
         # 2. Sync Status
         activity = self.sync_worker.current_activity if self.sync_worker else "Pronto"
-        status_item = Gtk.MenuItem(label=f"Status: {activity}")
-        status_item.set_sensitive(False)
-        menu.append(status_item)
+        self.status_item = Gtk.MenuItem(label=f"Status: {activity}")
+        self.status_item.set_sensitive(False)
+        menu.append(self.status_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -102,13 +130,12 @@ class DriveTrayIndicator:
         menu.append(Gtk.SeparatorMenuItem())
 
         # 4. Pause / Resume
-        if self.sync_worker and self.sync_worker.paused:
-            pause_item = Gtk.MenuItem(label="▶️ Retomar Sincronização")
-            pause_item.connect("activate", lambda _: self.sync_worker.resume())
-        else:
-            pause_item = Gtk.MenuItem(label="⏸️ Pausar Sincronização")
-            pause_item.connect("activate", lambda _: self.sync_worker.pause() if self.sync_worker else None)
-        menu.append(pause_item)
+        self._last_paused_state = bool(self.sync_worker and self.sync_worker.paused)
+        self.pause_item = Gtk.MenuItem(
+            label="▶️ Retomar Sincronização" if self._last_paused_state else "⏸️ Pausar Sincronização"
+        )
+        self.pause_item.connect("activate", self._on_toggle_pause)
+        menu.append(self.pause_item)
 
         # 5. Check Updates (Dual Channel)
         update_omaha = Gtk.MenuItem(label="🔄 Atualização Oficial do Google Drive (Google)")
@@ -140,6 +167,15 @@ class DriveTrayIndicator:
         menu.show_all()
         self.indicator.set_menu(menu)
         self.menu = menu
+
+    def _on_toggle_pause(self, _):
+        if not self.sync_worker:
+            return
+        if self.sync_worker.paused:
+            self.sync_worker.resume()
+        else:
+            self.sync_worker.pause()
+        self._on_timer_tick()
 
     def _on_login_click(self, _):
         if self.on_open_settings:
