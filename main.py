@@ -38,6 +38,7 @@ from core.config import (
     load_config, save_config, ensure_directories, unmount_fuse_path,
     ensure_apparmor_allows_mount, ensure_nautilus_mount_icons,
     get_account_mount_point, get_account_display_name,
+    reconcile_external_disk_mounts,
     DEFAULT_MOUNT_POINT, IPC_SOCKET_PATH
 )
 from core.db import MetadataDB
@@ -157,6 +158,9 @@ class GoogleDriveDaemon:
             self.config["account_mounts"][primary_id] = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
             save_config(self.config)
 
+        # Automatically recognize if an external disk changed its mount path (e.g. fixed in /etc/fstab)
+        reconcile_external_disk_mounts(self.config, persist=True)
+
         for idx, acc in enumerate(accounts):
             acc_id = acc["account_id"]
             email = acc.get("email", "")
@@ -185,6 +189,10 @@ class GoogleDriveDaemon:
                     "email": email,
                 }
                 self._mount_vfs_for_account(acc_id, mount_pt, api, cache)
+            else:
+                rt = self.account_runtimes[acc_id]
+                if rt.get("mount_point") != mount_pt:
+                    self._mount_vfs_for_account(acc_id, mount_pt, rt["api"], rt["cache"])
 
         # Active account is accounts[0] (ordered by last_sync DESC)
         active_acc = accounts[0]

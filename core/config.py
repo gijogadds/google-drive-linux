@@ -199,9 +199,235 @@ def _read_raw_config() -> Dict[str, Any]:
     return {}
 
 
+def _get_fstab_uuid_mounts() -> Dict[str, str]:
+    """Parse /etc/fstab to find persistent mount points configured by UUID= or LABEL=."""
+    uuid_map: Dict[str, str] = {}
+    fstab_path = "/etc/fstab"
+    if not os.path.exists(fstab_path):
+        return uuid_map
+    try:
+        with open(fstab_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "fuse.GoogleDriveFUSE" in line:
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    spec, mp = parts[0], parts[1].replace("\\040", " ").rstrip("/")
+                    if mp in ("", "/", "/boot", "/boot/efi", "none", "swap"):
+                        continue
+                    if spec.startswith("UUID="):
+                        uuid_val = spec.split("=", 1)[1].strip('"').strip("'")
+                        uuid_map[f"UUID:{uuid_val}"] = mp
+                    elif spec.startswith("/dev/disk/by-uuid/"):
+                        uuid_val = os.path.basename(spec)
+                        uuid_map[f"UUID:{uuid_val}"] = mp
+                    elif spec.startswith("LABEL="):
+                        lbl_val = spec.split("=", 1)[1].strip('"').strip("'")
+                        uuid_map[f"LABEL:{lbl_val}"] = mp
+    except Exception:
+        pass
+    return uuid_map
+
+
+def _get_external_block_devices() -> list:
+    """Return list of non-system block devices with their uuid, label, mountpoints, and preferred mountpoint."""
+    devices = []
+    fstab_map = _get_fstab_uuid_mounts()
+    try:
+        res = subprocess.run(
+            ["lsblk", "-J", "-o", "NAME,UUID,LABEL,MOUNTPOINTS"],
+            capture_output=True,
+            text=True,
+            timeout=4
+        )
+        if res.returncode != 0 or not res.stdout:
+            return devices
+        data = json.loads(res.stdout)
+    except Exception:
+        return devices
+
+    def _walk(nodes):
+        for node in nodes or []:
+            uuid_val = node.get("uuid")
+            label_val = node.get("label")
+            raw_mps = [m for m in (node.get("mountpoints") or []) if m]
+            # Filter out system root/boot/snap mounts
+            valid_mps = [
+                m.rstrip("/") for m in raw_mps
+                if m not in ("/", "/boot", "/boot/efi", "[SWAP]")
+                and not m.startswith("/snap/")
+            ]
+            if (uuid_val or label_val) and (valid_mps or f"UUID:{uuid_val}" in fstab_map or f"LABEL:{label_val}" in fstab_map):
+                fstab_mp = fstab_map.get(f"UUID:{uuid_val}") or fstab_map.get(f"LABEL:{label_val}")
+                preferred_mp = None
+                if fstab_mp and fstab_mp in valid_mps:
+                    preferred_mp = fstab_mp
+                elif valid_mps:
+                    # Prefer fixed mounts (/mnt/..., /media/...) over temporary udisks (/run/media/...)
+                    non_run_mps = [m for m in valid_mps if not m.startswith("/run/media/")]
+                    preferred_mp = non_run_mps[0] if non_run_mps else valid_mps[0]
+
+                devices.append({
+                    "uuid": uuid_val or "",
+                    "label": label_val or "",
+                    "mountpoints": valid_mps,
+                    "fstab_mp": fstab_mp or "",
+                    "preferred_mp": preferred_mp or "",
+                })
+            if node.get("children"):
+                _walk(node["children"])
+
+    _walk(data.get("blockdevices", []))
+    return devices
+
+
+def _resolve_single_mount_path(path: str, meta: dict, devices: list) -> tuple:
+    """
+    Given a configured mount path and optional saved disk metadata, detect if it resides on an
+    external/secondary disk and return (resolved_path, updated_meta, changed).
+    """
+    if not path:
+        return path, meta, False
+
+    clean_path = path.rstrip("/")
+    matched_dev = None
+    rel_path = ""
+
+    # 1. Try matching by saved UUID or Label first
+    if isinstance(meta, dict) and (meta.get("uuid") or meta.get("label")) and meta.get("rel_path") is not None:
+        saved_uuid = meta.get("uuid", "")
+        saved_label = meta.get("label", "")
+        for dev in devices:
+            if (saved_uuid and dev["uuid"] == saved_uuid) or (saved_label and dev["label"] == saved_label):
+                matched_dev = dev
+                rel_path = meta["rel_path"]
+                break
+
+    # 2. Try matching against any active mountpoint of any external device
+    if matched_dev is None:
+        for dev in devices:
+            for mp in sorted(dev["mountpoints"], key=len, reverse=True):
+                if clean_path == mp:
+                    matched_dev = dev
+                    rel_path = ""
+                    break
+                if clean_path.startswith(mp + "/"):
+                    matched_dev = dev
+                    rel_path = clean_path[len(mp) + 1:]
+                    break
+            if matched_dev:
+                break
+
+    # 3. Try matching legacy /run/media/<user>/<label>/<rel_path> or /media/<user>/<label>/<rel_path>
+    #    even after reboot when /run/media/<user>/<label> no longer exists
+    if matched_dev is None:
+        parts = clean_path.split("/")
+        # e.g. ['', 'run', 'media', 'gadds', 'Seagate Backup Plus Drive', 'Giovanni Augusto']
+        if len(parts) >= 5 and parts[1] == "run" and parts[2] == "media":
+            candidate_label = parts[4]
+            candidate_rel = "/".join(parts[5:])
+            for dev in devices:
+                if dev["label"] and dev["label"] == candidate_label:
+                    matched_dev = dev
+                    rel_path = candidate_rel
+                    break
+        elif len(parts) >= 4 and parts[1] == "media":
+            candidate_label = parts[3]
+            candidate_rel = "/".join(parts[4:])
+            for dev in devices:
+                if dev["label"] and dev["label"] == candidate_label:
+                    matched_dev = dev
+                    rel_path = candidate_rel
+                    break
+
+    if matched_dev is None:
+        return clean_path, meta, False
+
+    new_meta = {
+        "uuid": matched_dev["uuid"],
+        "label": matched_dev["label"],
+        "rel_path": rel_path,
+    }
+    preferred_mp = matched_dev.get("preferred_mp")
+    if not preferred_mp:
+        return clean_path, new_meta, (new_meta != meta)
+
+    new_path = os.path.join(preferred_mp, rel_path) if rel_path else preferred_mp
+    changed = (new_path != clean_path) or (new_meta != meta)
+    return new_path, new_meta, changed
+
+
+def reconcile_external_disk_mounts(config: Dict[str, Any], persist: bool = True) -> bool:
+    """
+    Automatically detect when an external HD / partition containing Google Drive folders
+    was moved or fixed in /etc/fstab (e.g. from /run/media/<user>/<Label> to /mnt/<name>)
+    and update config paths + cleanup old FUSE mounts seamlessly.
+    Returns True if any mount path or disk metadata was updated.
+    """
+    devices = _get_external_block_devices()
+    if not devices:
+        return False
+
+    any_changed = False
+    path_migrations = []
+
+    if "account_mount_disks" not in config or not isinstance(config.get("account_mount_disks"), dict):
+        config["account_mount_disks"] = {}
+    disk_metas = config["account_mount_disks"]
+
+    # 1. Reconcile per-account mount points
+    account_mounts = config.get("account_mounts")
+    if isinstance(account_mounts, dict):
+        for acc_id, mp in list(account_mounts.items()):
+            old_meta = disk_metas.get(acc_id)
+            new_mp, new_meta, changed = _resolve_single_mount_path(mp, old_meta, devices)
+            if new_meta:
+                disk_metas[acc_id] = new_meta
+            if changed:
+                any_changed = True
+                if new_mp != mp:
+                    path_migrations.append((mp, new_mp))
+                    account_mounts[acc_id] = new_mp
+                    print(f"[Config] Disco externo reconhecido automaticamente ({new_meta.get('label') or new_meta.get('uuid')}): '{mp}' -> '{new_mp}'")
+
+    # 2. Reconcile primary mount_point
+    primary_mp = config.get("mount_point")
+    if primary_mp:
+        old_p_meta = disk_metas.get("primary")
+        new_p_mp, new_p_meta, p_changed = _resolve_single_mount_path(primary_mp, old_p_meta, devices)
+        if new_p_meta:
+            disk_metas["primary"] = new_p_meta
+        if p_changed:
+            any_changed = True
+            if new_p_mp != primary_mp:
+                path_migrations.append((primary_mp, new_p_mp))
+                config["mount_point"] = new_p_mp
+
+    # 3. Clean up old FUSE mounts if paths migrated
+    for old_path, new_path in set(path_migrations):
+        unmount_fuse_path(old_path, remove_if_empty=True)
+        try:
+            os.makedirs(new_path, exist_ok=True)
+        except Exception:
+            pass
+
+    if any_changed and persist:
+        try:
+            with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+            ensure_nautilus_mount_icons(config)
+        except Exception as e:
+            print(f"[Config] Erro ao salvar migração automática de disco: {e}")
+
+    return any_changed
+
+
 def ensure_directories():
     """Ensure all required application directories exist, recovering from stale FUSE mounts if needed."""
     raw = _read_raw_config()
+    if raw:
+        reconcile_external_disk_mounts(raw, persist=True)
     active_mount = raw.get("mount_point") or DEFAULT_MOUNT_POINT
     active_cache = raw.get("cache_dir") or CACHE_DIR
 
@@ -254,6 +480,7 @@ def load_config() -> Dict[str, Any]:
             user_config = json.load(f)
             merged = DEFAULT_CONFIG.copy()
             merged.update(user_config)
+            reconcile_external_disk_mounts(merged, persist=True)
             return merged
     except Exception as e:
         print(f"[Config] Error loading configuration: {e}. Using defaults.")
@@ -262,6 +489,7 @@ def load_config() -> Dict[str, Any]:
 
 def save_config(config: Dict[str, Any]):
     """Save configuration to disk."""
+    reconcile_external_disk_mounts(config, persist=False)
     ensure_directories()
     with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
