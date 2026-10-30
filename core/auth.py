@@ -157,99 +157,45 @@ class AuthManager:
         except Exception:
             pass
 
-    def _open_oauth_browser(self, auth_url: str, isolated: bool = False):
-        """Open the OAuth URL in a dedicated browser window that can be closed automatically upon completion."""
+    def _open_oauth_browser(self, auth_url: str, isolated: bool = False, redirect_uri: str = ""):
+        """Open the OAuth URL in an independent native app window (GTK3+WebKit2) to keep Chrome 100% untouched."""
         import shutil
         import subprocess
-        import tempfile
 
         self._oauth_browser_proc = None
-        self._oauth_temp_dir = None
+        self._oauth_session_dir = os.path.expanduser("~/.config/google-drive-linux/workspace_webkit/oauth_temp")
 
-        chrome_flags = [
-            "--no-first-run",
-            "--no-default-browser-check",
-            f"--app={auth_url}",
-        ]
-        if isolated:
-            self._oauth_temp_dir = tempfile.mkdtemp(prefix="gdrive-oauth-")
-            chrome_flags.insert(0, f"--user-data-dir={self._oauth_temp_dir}")
-
-        # 1. Check native Chromium/Chrome/Brave/Edge binaries
-        for bin_name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge"):
-            path = shutil.which(bin_name)
-            if path:
-                try:
-                    self._oauth_browser_proc = subprocess.Popen(
-                        [path] + chrome_flags,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    return
-                except Exception:
-                    pass
-
-        # 2. Check Flatpak Chrome/Chromium/Brave/Edge
-        if shutil.which("flatpak"):
-            for app_id in ("com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser", "com.microsoft.Edge"):
-                try:
-                    chk = subprocess.run(["flatpak", "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if chk.returncode == 0:
-                        flatpak_cmd = ["flatpak", "run"]
-                        if self._oauth_temp_dir:
-                            flatpak_cmd.append(f"--filesystem={self._oauth_temp_dir}")
-                        flatpak_cmd.append(app_id)
-                        flatpak_cmd.extend(chrome_flags)
-                        self._oauth_browser_proc = subprocess.Popen(
-                            flatpak_cmd,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
-                        )
-                        return
-                except Exception:
-                    pass
-
-        # 3. Check Firefox
-        ff_path = shutil.which("firefox")
-        if ff_path and isolated:
+        # 1. Preferred: Dedicated Native WebKit2 Auth Window (Completely isolated from Google Chrome)
+        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        auth_win_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth_window.py")
+        if has_display and os.path.exists(auth_win_script):
             try:
                 self._oauth_browser_proc = subprocess.Popen(
-                    [ff_path, "--private-window", auth_url],
+                    [sys.executable, auth_win_script, auth_url, redirect_uri or "http://127.0.0.1", self._oauth_session_dir],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
+                print("[Auth] Janela nativa independente aberta para login Google (sem interferir no Chrome).")
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[Auth] Aviso ao abrir janela nativa WebKit: {e}")
 
+        # 2. Fallback to standard system browser if headless or WebKit unavailable
         webbrowser.open(auth_url)
 
     def _close_oauth_browser(self):
-        """Automatically close the dedicated OAuth browser process and clean up temporary profile."""
-        import shutil
+        """Automatically close the dedicated OAuth window."""
         proc = getattr(self, "_oauth_browser_proc", None)
-        tmp_dir = getattr(self, "_oauth_temp_dir", None)
         self._oauth_browser_proc = None
-        self._oauth_temp_dir = None
-
-        def _cleanup():
-            time.sleep(0.9)
-            if proc is not None:
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
                 try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-            if tmp_dir and os.path.exists(tmp_dir):
-                try:
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    proc.kill()
                 except Exception:
                     pass
-
-        threading.Thread(target=_cleanup, daemon=True).start()
 
     def login_interactive(self, login_hint: Optional[str] = None, isolated_session: Optional[bool] = None) -> Optional[Dict[str, Any]]:
         """Start local HTTP callback server and open browser for Google OAuth."""
@@ -283,8 +229,8 @@ class AuthManager:
 
         auth_url = f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(auth_params)}"
         use_isolated = isolated_session if isolated_session is not None else (len(self.accounts) > 0)
-        print(f"[Auth] Abrindo navegador para login (isolado={use_isolated}): {auth_url}")
-        self._open_oauth_browser(auth_url, isolated=use_isolated)
+        print(f"[Auth] Abrindo autenticação nativa independente (isolado={use_isolated}): {auth_url}")
+        self._open_oauth_browser(auth_url, isolated=use_isolated, redirect_uri=redirect_uri)
 
         # Wait for OAuth callback (ignoring incidental requests like /favicon.ico)
         deadline = time.time() + 180
@@ -344,6 +290,24 @@ class AuthManager:
 
         self.accounts[account_id] = account_info
         self._save_accounts_to_disk()
+
+        # Persist session cookies to dedicated account workspace profile so Docs/Sheets open directly without login
+        try:
+            import shutil
+            session_dir = getattr(self, "_oauth_session_dir", None)
+            if session_dir and os.path.exists(session_dir) and account_id:
+                dest_profile_dir = os.path.expanduser(f"~/.config/google-drive-linux/workspace_webkit/acc_{account_id}")
+                os.makedirs(dest_profile_dir, exist_ok=True)
+                for it in os.listdir(session_dir):
+                    s_path = os.path.join(session_dir, it)
+                    d_path = os.path.join(dest_profile_dir, it)
+                    if os.path.isdir(s_path):
+                        shutil.copytree(s_path, d_path, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(s_path, d_path)
+                print(f"[Auth] Sessão e cookies salvos para Docs/Sheets da conta {account_id} ({account_info.get('email')}).")
+        except Exception as e:
+            print(f"[Auth] Aviso ao persistir cookies da conta: {e}")
 
         # Persist to SQLite metadata DB so both CLI and GUI share state immediately
         try:
