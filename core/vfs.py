@@ -106,12 +106,27 @@ class GoogleDriveFUSE(Operations):
         else:
             url = f"https://drive.google.com/open?id={item_id}"
 
+        email = ""
+        try:
+            from core.config import ACCOUNTS_FILE_PATH
+            if os.path.exists(ACCOUNTS_FILE_PATH):
+                with open(ACCOUNTS_FILE_PATH, "r", encoding="utf-8") as f:
+                    acc_data = json.load(f)
+                email = (acc_data.get(self.account_id) or {}).get("email", "")
+        except Exception:
+            pass
+
+        if email and "authuser=" not in url:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}authuser={urllib.parse.quote(email)}"
+
         payload = {
             "gd_type": doc_type,
             "doc_id": item_id,
             "url": url,
             "title": item.get("name", ""),
             "account_id": self.account_id,
+            "email": email,
         }
         return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
 
