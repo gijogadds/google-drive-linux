@@ -203,6 +203,10 @@ def get_doc_url(identifier: str, doc_type: str = "doc", email: str = "") -> str:
         else:
             base_url = f"https://drive.google.com/open?id={clean}"
 
+    if "hl=" not in base_url and ("docs.google.com" in base_url or "drive.google.com" in base_url):
+        sep = "&" if "?" in base_url else "?"
+        base_url = f"{base_url}{sep}hl=pt-BR"
+
     if email and "authuser=" not in base_url and ("docs.google.com" in base_url or "drive.google.com" in base_url):
         sep = "&" if "?" in base_url else "?"
         base_url = f"{base_url}{sep}authuser={urllib.parse.quote(email)}"
@@ -272,6 +276,8 @@ def _run_native_webkit_app(url: str, doc_type: str, initial_title: str = "", acc
         base_cache_directory=cache_dir,
     )
     web_context = WebKit2.WebContext.new_with_website_data_manager(data_manager)
+    if hasattr(web_context, "set_preferred_languages"):
+        web_context.set_preferred_languages(["pt-BR", "pt", "en-US", "en"])
     cookie_manager = web_context.get_cookie_manager()
     cookie_manager.set_persistent_storage(
         cookies_file,

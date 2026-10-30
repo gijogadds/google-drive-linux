@@ -117,6 +117,10 @@ class GoogleDriveFUSE(Operations):
         except Exception:
             pass
 
+        if "hl=" not in url:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}hl=pt-BR"
+
         if email and "authuser=" not in url:
             sep = "&" if "?" in url else "?"
             url = f"{url}{sep}authuser={urllib.parse.quote(email)}"
