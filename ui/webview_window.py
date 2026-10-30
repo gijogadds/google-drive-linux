@@ -1102,7 +1102,7 @@ class GoogleDriveHomeWindow:
     def _open_local_path(self, full_path: str, reveal_folder: bool = False):
         if not reveal_folder and full_path.endswith((".gdoc", ".gsheet", ".gslides", ".gform", ".desktop")):
             from core.doc_launcher import launch_doc_as_app
-            launch_doc_as_app(full_path)
+            launch_doc_as_app(full_path, background=True)
             return
         target = os.path.dirname(full_path) if reveal_folder else full_path
         if not os.path.exists(target):

@@ -12,13 +12,23 @@ ln -sf /opt/google-drive-linux/gdrive-doc-launcher /usr/local/bin/gdrive-doc-lau
 mkdir -p /usr/share/nautilus-python/extensions/
 cp /opt/google-drive-linux/nautilus/google_drive_nautilus.py /usr/share/nautilus-python/extensions/
 
-# Install Desktop file & High-res Icons
+# Install Desktop files, MIME types & High-res Icons
 cp /opt/google-drive-linux/packaging/desktop/google-drive.desktop /usr/share/applications/
-mkdir -p /usr/share/icons/hicolor/256x256/apps/
+cp /opt/google-drive-linux/packaging/desktop/google-docs.desktop /usr/share/applications/ 2>/dev/null || true
+cp /opt/google-drive-linux/packaging/desktop/google-sheets.desktop /usr/share/applications/ 2>/dev/null || true
+cp /opt/google-drive-linux/packaging/desktop/google-slides.desktop /usr/share/applications/ 2>/dev/null || true
+mkdir -p /usr/share/mime/packages/
+cp /opt/google-drive-linux/packaging/desktop/google-drive-workspace.xml /usr/share/mime/packages/ 2>/dev/null || true
+update-mime-database /usr/share/mime 2>/dev/null || true
+update-desktop-database /usr/share/applications 2>/dev/null || true
+mkdir -p /usr/share/icons/hicolor/256x256/apps/ /usr/share/icons/hicolor/256x256/mimetypes/
 cp /opt/google-drive-linux/assets/icons/drive_fs.png /usr/share/icons/hicolor/256x256/apps/google-drive.png
 cp /opt/google-drive-linux/assets/icons/docs.png /usr/share/icons/hicolor/256x256/apps/google-docs.png
 cp /opt/google-drive-linux/assets/icons/sheets.png /usr/share/icons/hicolor/256x256/apps/google-sheets.png
 cp /opt/google-drive-linux/assets/icons/slides.png /usr/share/icons/hicolor/256x256/apps/google-slides.png
+cp /opt/google-drive-linux/assets/icons/docs.png /usr/share/icons/hicolor/256x256/mimetypes/application-vnd.google-apps.document.png
+cp /opt/google-drive-linux/assets/icons/sheets.png /usr/share/icons/hicolor/256x256/mimetypes/application-vnd.google-apps.spreadsheet.png
+cp /opt/google-drive-linux/assets/icons/slides.png /usr/share/icons/hicolor/256x256/mimetypes/application-vnd.google-apps.presentation.png
 gtk-update-icon-cache /usr/share/icons/hicolor || true
 
 # Enable systemd user service by default for the installing user
