@@ -455,15 +455,28 @@ def _run_native_webkit_app(url: str, doc_type: str, initial_title: str = "", acc
         uri = wv.get_uri() or ""
         if "accounts.google.com" in uri and email:
             js = (
-                f"(function(){{"
-                f"var el=document.getElementById('identifierId')||document.querySelector('input[type=email]');"
-                f"if(el && !el.value){{el.value={json.dumps(email)};el.dispatchEvent(new Event('input',{{bubbles:true}}));}}"
+                f"(function fillEmail() {{"
+                f"  var el = document.getElementById('identifierId') || document.querySelector('input[type=email]');"
+                f"  if (el && !el.value) {{"
+                f"    el.value = {json.dumps(email)};"
+                f"    el.dispatchEvent(new Event('input', {{ bubbles: true }}));"
+                f"    el.dispatchEvent(new Event('change', {{ bubbles: true }}));"
+                f"  }}"
                 f"}})();"
             )
-            if hasattr(wv, "evaluate_javascript"):
-                wv.evaluate_javascript(js, -1, None, None, None, None, None)
-            elif hasattr(wv, "run_javascript"):
-                wv.run_javascript(js, None, None, None)
+            def _inject():
+                try:
+                    if hasattr(wv, "evaluate_javascript"):
+                        wv.evaluate_javascript(js, -1, None, None, None, None, None)
+                    elif hasattr(wv, "run_javascript"):
+                        wv.run_javascript(js, None, None, None)
+                except Exception:
+                    pass
+                return False
+
+            _inject()
+            GLib.timeout_add(500, _inject)
+            GLib.timeout_add(1500, _inject)
 
     web_context.connect("download-started", _on_download_started)
     webview.connect("notify::title", _on_title_changed)
@@ -592,14 +605,7 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
 
     url = get_doc_url(raw_target, doc_type, email=email)
 
-    # 1. Try launching with the embedded standalone runtime (Chromium engine with Offline support)
-    try:
-        if _launch_embedded_runner(url, doc_type, title, acc_id, email, background=background):
-            return True
-    except Exception as e:
-        print(f"[DocLauncher] Aviso: embedded runner indisponível ({e}), tentando WebKit2.")
-
-    # 2. Launch in background process if requested
+    # Launch in background process if requested
     if background:
         launcher_bin = "/usr/local/bin/gdrive-doc-launcher"
         if not os.path.exists(launcher_bin):
@@ -614,7 +620,8 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
         )
         return
 
-    # 3. Fallback: Run as native standalone application window (GTK3 + WebKit2)
+    # Run as native standalone application window (GTK3 + WebKit2)
+    # Isolated per account (Giovanni Augusto vs Store Caneca Barata)
     try:
         _run_native_webkit_app(url, doc_type, initial_title=title, account_id=acc_id, email=email)
     except Exception as e:
