@@ -69,10 +69,61 @@ def send_ipc_command(cmd: str) -> bool:
         return False
 
 
+def _setup_file_logging():
+    """Mirror stdout and stderr to rotating ~/.config/google-drive-linux/logs/google-drive.log."""
+    from core.config import LOG_DIR
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        log_path = os.path.join(LOG_DIR, "google-drive.log")
+
+        class TeeLogger:
+            def __init__(self, original, path):
+                self.original = original
+                self.path = path
+
+            def write(self, data):
+                if self.original:
+                    try:
+                        self.original.write(data)
+                        self.original.flush()
+                    except Exception:
+                        pass
+                if data and data.strip():
+                    try:
+                        if os.path.exists(self.path) and os.path.getsize(self.path) > 5 * 1024 * 1024:
+                            rot = self.path + ".1"
+                            try:
+                                if os.path.exists(rot):
+                                    os.remove(rot)
+                                os.rename(self.path, rot)
+                            except Exception:
+                                pass
+                        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                        with open(self.path, "a", encoding="utf-8") as f:
+                            for line in data.splitlines():
+                                if line.strip():
+                                    f.write(f"[{ts}] {line}\n")
+                    except Exception:
+                        pass
+
+            def flush(self):
+                if self.original:
+                    try:
+                        self.original.flush()
+                    except Exception:
+                        pass
+
+        sys.stdout = TeeLogger(sys.stdout, log_path)
+        sys.stderr = TeeLogger(sys.stderr, log_path)
+    except Exception as e:
+        print(f"[Log] Aviso ao inicializar log em arquivo: {e}")
+
+
 class GoogleDriveDaemon:
     def __init__(self, open_home_on_start: bool = False, open_settings_on_start: bool = False):
         install_global_crash_hook()
         ensure_directories()
+        _setup_file_logging()
         self.config = load_config()
         self.db = MetadataDB()
         self.auth = AuthManager()

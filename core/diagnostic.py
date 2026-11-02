@@ -74,15 +74,30 @@ class DiagnosticCollector:
 
     @staticmethod
     def get_recent_logs(max_lines: int = 50) -> str:
-        """Fetch last lines of application logs."""
+        """Fetch last lines of application logs from log file or systemd journal."""
         main_log = os.path.join(LOG_DIR, "google-drive.log")
-        if os.path.exists(main_log):
+        if os.path.exists(main_log) and os.path.getsize(main_log) > 0:
             try:
                 with open(main_log, "r", encoding="utf-8", errors="replace") as f:
                     lines = f.readlines()
-                    return "".join(lines[-max_lines:])
-            except Exception as e:
-                return f"Falha ao ler log: {e}"
+                    if lines:
+                        return "".join(lines[-max_lines:])
+            except Exception:
+                pass
+
+        # Fallback to systemd user journal if log file is not yet populated
+        try:
+            res = subprocess.run(
+                ["journalctl", "--user", "-u", "google-drive.service", "-n", str(max_lines), "--no-pager"],
+                capture_output=True,
+                text=True,
+                timeout=4
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+
         return "Nenhum arquivo de log anterior registrado."
 
     @staticmethod
@@ -262,7 +277,8 @@ class CrashReporter:
 
 
 def install_global_crash_hook():
-    """Hook sys.excepthook to automatically capture any uncaught exception silently in the background without crashing UI callbacks."""
+    """Hook sys.excepthook and threading.excepthook to automatically capture any uncaught exception silently in the background without crashing UI callbacks."""
+    import threading
     original_hook = sys.excepthook
 
     def custom_hook(exc_type, exc_value, exc_tb):
@@ -277,3 +293,16 @@ def install_global_crash_hook():
             print(f"[Diagnóstico] Erro interno ao salvar relatório: {e}")
 
     sys.excepthook = custom_hook
+
+    if hasattr(threading, "excepthook"):
+        def thread_hook(args):
+            if issubclass(args.exc_type, KeyboardInterrupt):
+                return
+            print(f"\n[Diagnóstico] Exceção em thread capturada ({args.exc_value}); registrando log em segundo plano...")
+            try:
+                report = CrashReporter.generate_report(args.exc_type, args.exc_value, args.exc_tb)
+                CrashReporter.report_issue(report, silent_background=True)
+            except Exception as e:
+                print(f"[Diagnóstico] Erro interno ao salvar relatório de thread: {e}")
+
+        threading.excepthook = thread_hook
