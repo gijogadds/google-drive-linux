@@ -518,26 +518,39 @@ def sync_gtk_bookmarks(config: Optional[Dict[str, Any]] = None) -> bool:
             continue
         filtered_lines.append(line)
 
-    is_multi = len([m for m in mounts.values() if m]) > 1
+    # If the mounts are already exposed in Nautilus and GTK file choosers via /etc/fstab and GVFS
+    # (with x-gvfs-show and the official Google Drive logo), we DO NOT add duplicate entries in GTK bookmarks.
+    # Instead, we keep GTK bookmarks clean and only remove any leftover Google Drive bookmark entries!
+    has_gvfs = False
+    if os.path.exists("/etc/fstab"):
+        try:
+            with open("/etc/fstab", "r", encoding="utf-8") as f:
+                fcontent = f.read()
+                has_gvfs = "# google-drive-linux" in fcontent and "x-gvfs-show" in fcontent
+        except Exception:
+            pass
+
     new_entries = []
-    for acc_id, mp in mounts.items():
-        if not mp:
-            continue
-        clean_mp = os.path.abspath(mp).rstrip("/")
-        uri = "file://" + urllib.parse.quote(clean_mp)
+    if not has_gvfs:
+        is_multi = len([m for m in mounts.values() if m]) > 1
+        for acc_id, mp in mounts.items():
+            if not mp:
+                continue
+            clean_mp = os.path.abspath(mp).rstrip("/")
+            uri = "file://" + urllib.parse.quote(clean_mp)
 
-        display = names.get(acc_id)
-        if not display and acc_id in accounts_info:
-            display = accounts_info[acc_id].get("display_name") or accounts_info[acc_id].get("email")
-        if not display:
-            display = os.path.basename(clean_mp)
+            display = names.get(acc_id)
+            if not display and acc_id in accounts_info:
+                display = accounts_info[acc_id].get("display_name") or accounts_info[acc_id].get("email")
+            if not display:
+                display = os.path.basename(clean_mp)
 
-        if is_multi:
-            label = f"Google Drive ({display})"
-        else:
-            label = f"Google Drive ({display})" if display and display != "GoogleDrive" else "Google Drive"
+            if is_multi:
+                label = f"Google Drive ({display})"
+            else:
+                label = f"Google Drive ({display})" if display and display != "GoogleDrive" else "Google Drive"
 
-        new_entries.append(f"{uri} {label}")
+            new_entries.append(f"{uri} {label}")
 
     final_lines = filtered_lines + new_entries
     try:
