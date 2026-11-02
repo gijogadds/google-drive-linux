@@ -96,6 +96,22 @@ def _get_accounts_dict() -> Dict[str, Any]:
     return {}
 
 
+def _resolve_account_id_from_hint(hint: str) -> Tuple[str, str]:
+    """Given an account ID, email, or display name, return (account_id, email)."""
+    if not hint:
+        return "", ""
+    accounts = _get_accounts_dict()
+    clean_hint = hint.strip().lower()
+    if hint in accounts:
+        return hint, (accounts[hint].get("email") or "")
+    for a_id, info in accounts.items():
+        if (info.get("email") or "").strip().lower() == clean_hint:
+            return a_id, (info.get("email") or "")
+        if (info.get("display_name") or "").strip().lower() == clean_hint:
+            return a_id, (info.get("email") or "")
+    return hint, ""
+
+
 def _resolve_account_for_file_path(file_path: str) -> Tuple[str, str]:
     """Given a file path, resolve (account_id, email) using configured account mounts."""
     if not file_path:
@@ -579,6 +595,9 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
     falling back to native GTK3 WebKit2.
     """
     raw_target = (identifier or "").strip()
+    if raw_target in ("%f", "%F", "%u", "%U"):
+        raw_target = ""
+
     if raw_target.startswith("file://"):
         parsed = urllib.parse.urlparse(raw_target)
         raw_target = urllib.parse.unquote(parsed.path)
@@ -587,9 +606,15 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
     acc_id = force_account_id
     email = ""
 
+    if acc_id:
+        acc_id, email = _resolve_account_id_from_hint(acc_id)
+
     if (
-        os.path.isfile(raw_target)
-        or raw_target.endswith((".gdoc", ".gsheet", ".gslides", ".gform", ".desktop"))
+        raw_target
+        and (
+            os.path.isfile(raw_target)
+            or raw_target.endswith((".gdoc", ".gsheet", ".gslides", ".gform", ".desktop"))
+        )
     ):
         raw_target, doc_type, parsed_title, parsed_acc_id, parsed_email = _parse_local_doc_file(raw_target, fallback_type=doc_type)
         if not title:
@@ -605,6 +630,23 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
     elif raw_target in ("slide", "presentation", "--home-slide", "--new-slide"):
         doc_type = "slide"
 
+    # If account is still not determined (e.g. launched directly from app menu),
+    # fallback to active account or first registered account
+    if not acc_id:
+        try:
+            from core.config import load_config
+            cfg = load_config()
+            active_id = cfg.get("active_account_id")
+            accounts = _get_accounts_dict()
+            if active_id and active_id in accounts:
+                acc_id = active_id
+                email = (accounts[active_id].get("email") or "")
+            elif accounts:
+                acc_id = next(iter(accounts.keys()))
+                email = (accounts[acc_id].get("email") or "")
+        except Exception:
+            pass
+
     if not email and acc_id:
         accounts = _get_accounts_dict()
         email = (accounts.get(acc_id) or {}).get("email", "")
@@ -619,8 +661,12 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 "gdrive-doc-launcher",
             )
+        cmd_args = [sys.executable, launcher_bin, f"--type={doc_type}"]
+        if acc_id:
+            cmd_args.append(f"--account={acc_id}")
+        cmd_args.extend([raw_target, title])
         subprocess.Popen(
-            [sys.executable, launcher_bin, f"--type={doc_type}", raw_target, title],
+            cmd_args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -637,17 +683,49 @@ def launch_doc_as_app(identifier: str = "doc", doc_type: str = "doc", background
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        launch_doc_as_app("doc", "doc")
-        sys.exit(0)
+    import argparse
+    parser = argparse.ArgumentParser(description="Google Drive Standalone Workspace Launcher")
+    parser.add_argument("target", nargs="?", default="", help="File path, URL, file ID, or doc type")
+    parser.add_argument("doc_type_pos", nargs="?", default="", help="Optional doc type (doc, sheet, slide)")
+    parser.add_argument("title", nargs="?", default="", help="Optional initial window title")
+    parser.add_argument("--type", "--doc-type", dest="doc_type", default="", help="Type of document (doc, sheet, slide)")
+    parser.add_argument("--account", "--acc", dest="account", default="", help="Target account ID or email")
+    parser.add_argument("--new-doc", action="store_true", help="Create new Google Doc")
+    parser.add_argument("--new-sheet", action="store_true", help="Create new Google Sheet")
+    parser.add_argument("--new-slide", action="store_true", help="Create new Google Slide")
 
-    arg1 = sys.argv[1]
-    if arg1.startswith("--type="):
-        d_type = arg1.split("=", 1)[1]
-        target = sys.argv[2] if len(sys.argv) > 2 else d_type
-        title_arg = sys.argv[3] if len(sys.argv) > 3 else ""
-        launch_doc_as_app(target, d_type, initial_title=title_arg)
-    else:
-        d_type = sys.argv[2] if len(sys.argv) > 2 else "doc"
-        title_arg = sys.argv[3] if len(sys.argv) > 3 else ""
-        launch_doc_as_app(arg1, d_type, initial_title=title_arg)
+    args, unknown = parser.parse_known_args()
+
+    target = args.target
+    if target in ("%f", "%F", "%u", "%U"):
+        target = ""
+
+    doc_type = args.doc_type or args.doc_type_pos or ""
+    title = args.title
+
+    if args.new_doc:
+        target = "--new-doc"
+        doc_type = "doc"
+    elif args.new_sheet:
+        target = "--new-sheet"
+        doc_type = "sheet"
+    elif args.new_slide:
+        target = "--new-slide"
+        doc_type = "slide"
+
+    if not target and not doc_type:
+        target = "doc"
+        doc_type = "doc"
+    elif not target and doc_type:
+        target = doc_type
+    elif target and not doc_type:
+        if target in ("sheet", "spreadsheet", "--home-sheet", "--new-sheet"):
+            doc_type = "sheet"
+        elif target in ("slide", "presentation", "--home-slide", "--new-slide"):
+            doc_type = "slide"
+        elif target in ("doc", "document", "--home-doc", "--new-doc"):
+            doc_type = "doc"
+        else:
+            doc_type = "doc"
+
+    launch_doc_as_app(target, doc_type, initial_title=title, force_account_id=args.account)

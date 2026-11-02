@@ -38,7 +38,7 @@ from core.config import (
     load_config, save_config, ensure_directories, unmount_fuse_path,
     ensure_apparmor_allows_mount, ensure_nautilus_mount_icons,
     get_account_mount_point, get_account_display_name,
-    reconcile_external_disk_mounts,
+    reconcile_external_disk_mounts, sync_gtk_bookmarks, update_workspace_desktop_entries,
     DEFAULT_MOUNT_POINT, IPC_SOCKET_PATH
 )
 from core.db import MetadataDB
@@ -107,6 +107,7 @@ class GoogleDriveDaemon:
 
         ensure_apparmor_allows_mount(mount_pt)
         ensure_nautilus_mount_icons(self.config)
+        sync_gtk_bookmarks(self.config)
         try:
             if os.path.islink(mount_pt):
                 os.unlink(mount_pt)

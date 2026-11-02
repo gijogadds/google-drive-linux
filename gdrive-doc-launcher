@@ -4,24 +4,60 @@ Google Drive for Linux - Standalone App Window Launcher CLI
 Supports:
   gdrive-doc-launcher [doc|sheet|slide]
   gdrive-doc-launcher --type=doc|sheet|slide [ARQUIVO.gdoc|.gsheet|.gslides|ID_OU_URL]
+  gdrive-doc-launcher --account=... --type=...
+  gdrive-doc-launcher --new-sheet|--new-doc|--new-slide
   gdrive-doc-launcher <ARQUIVO_OU_ID_OU_URL> [doc|sheet|slide|form]
 """
 import sys
 import os
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.doc_launcher import launch_doc_as_app
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        launch_doc_as_app("doc", "doc")
-        sys.exit(0)
+    parser = argparse.ArgumentParser(description="Google Drive Standalone Workspace Launcher")
+    parser.add_argument("target", nargs="?", default="", help="File path, URL, file ID, or doc type")
+    parser.add_argument("doc_type_pos", nargs="?", default="", help="Optional doc type (doc, sheet, slide)")
+    parser.add_argument("title", nargs="?", default="", help="Optional initial window title")
+    parser.add_argument("--type", "--doc-type", dest="doc_type", default="", help="Type of document (doc, sheet, slide)")
+    parser.add_argument("--account", "--acc", dest="account", default="", help="Target account ID or email")
+    parser.add_argument("--new-doc", action="store_true", help="Create new Google Doc")
+    parser.add_argument("--new-sheet", action="store_true", help="Create new Google Sheet")
+    parser.add_argument("--new-slide", action="store_true", help="Create new Google Slide")
 
-    arg1 = sys.argv[1]
-    if arg1.startswith("--type="):
-        doc_type = arg1.split("=", 1)[1]
-        target = sys.argv[2] if len(sys.argv) > 2 else doc_type
-        launch_doc_as_app(target, doc_type)
-    else:
-        doc_type = sys.argv[2] if len(sys.argv) > 2 else "doc"
-        launch_doc_as_app(arg1, doc_type)
+    args, unknown = parser.parse_known_args()
+
+    target = args.target
+    if target in ("%f", "%F", "%u", "%U"):
+        target = ""
+
+    doc_type = args.doc_type or args.doc_type_pos or ""
+    title = args.title
+
+    if args.new_doc:
+        target = "--new-doc"
+        doc_type = "doc"
+    elif args.new_sheet:
+        target = "--new-sheet"
+        doc_type = "sheet"
+    elif args.new_slide:
+        target = "--new-slide"
+        doc_type = "slide"
+
+    if not target and not doc_type:
+        target = "doc"
+        doc_type = "doc"
+    elif not target and doc_type:
+        target = doc_type
+    elif target and not doc_type:
+        if target in ("sheet", "spreadsheet", "--home-sheet", "--new-sheet"):
+            doc_type = "sheet"
+        elif target in ("slide", "presentation", "--home-slide", "--new-slide"):
+            doc_type = "slide"
+        elif target in ("doc", "document", "--home-doc", "--new-doc"):
+            doc_type = "doc"
+        else:
+            doc_type = "doc"
+
+    launch_doc_as_app(target, doc_type, initial_title=title, force_account_id=args.account)

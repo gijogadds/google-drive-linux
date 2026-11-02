@@ -167,6 +167,12 @@ class GoogleDriveFUSE(Operations):
             if not item:
                 # Fallback to direct name lookup
                 item = self.db.get_item_by_path(current_parent, part, account_id=self.account_id)
+            if not item and " (" in real_name:
+                import re
+                m = re.match(r"^(.*?)\s*\(\d+\)(\.[^.]*)?$", real_name)
+                if m:
+                    base_orig = m.group(1) + (m.group(2) or "")
+                    item = self.db.get_item_by_path(current_parent, base_orig, account_id=self.account_id)
             if not item:
                 return None
             current_parent = item["id"]
@@ -258,14 +264,30 @@ class GoogleDriveFUSE(Operations):
             except Exception:
                 pass
 
+        seen_names = set()
         for child in children:
             name = child["name"]
+            # Sanitize forward slashes in filenames to prevent POSIX / glibc EIO errors
+            if "/" in name:
+                name = name.replace("/", "／")
             # Append native Google Workspace extension (.gdoc, .gsheet, .gslides, .gform) so Linux MIME opens the installed app
             mime = child.get("mime_type", "")
             if not child.get("is_directory") and mime.startswith("application/vnd.google-apps."):
                 ext = self._get_gdoc_extension(mime)
                 if not name.endswith(ext):
                     name = f"{name}{ext}"
+
+            # Deduplicate identical names in the same folder if Google Drive has duplicates
+            if name in seen_names:
+                base, ext_part = os.path.splitext(name)
+                counter = 2
+                alt_name = f"{base} ({counter}){ext_part}"
+                while alt_name in seen_names:
+                    counter += 1
+                    alt_name = f"{base} ({counter}){ext_part}"
+                name = alt_name
+
+            seen_names.add(name)
             dirents.append(name)
 
         return dirents
@@ -438,29 +460,13 @@ class GoogleDriveFUSE(Operations):
         )
 
 
-def _sync_gtk_bookmark(mount_point: str, enable_bookmark: bool):
-    """Ensure Nautilus left sidebar always shows GoogleDrive pointing to mount_point."""
-    import urllib.parse
-    bookmarks_file = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
-    os.makedirs(os.path.dirname(bookmarks_file), exist_ok=True)
-    uri = "file://" + urllib.parse.quote(mount_point)
-    target_line = f"{uri} GoogleDrive"
-    lines = []
-    if os.path.exists(bookmarks_file):
-        try:
-            with open(bookmarks_file, "r", encoding="utf-8") as f:
-                lines = [ln.strip() for ln in f.readlines() if ln.strip()]
-        except Exception:
-            lines = []
-    # Remove any old GoogleDrive bookmark entries
-    filtered = [ln for ln in lines if not ln.endswith(" GoogleDrive") and "GoogleDrive" not in ln]
-    if enable_bookmark:
-        filtered.append(target_line)
+def _sync_gtk_bookmark(mount_point: str = "", enable_bookmark: bool = True):
+    """Ensure Nautilus and GTK FileChooser sidebars show all configured Google Drive accounts."""
     try:
-        with open(bookmarks_file, "w", encoding="utf-8") as f:
-            f.write("\n".join(filtered) + ("\n" if filtered else ""))
-    except Exception:
-        pass
+        from core.config import sync_gtk_bookmarks
+        sync_gtk_bookmarks()
+    except Exception as e:
+        print(f"[VFS] Erro ao sincronizar favoritos do GTK: {e}")
 
 
 def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foreground: bool = False, volume_name: str = ""):
@@ -483,8 +489,8 @@ def mount_fuse(mount_point: str, db, cache_manager, api, account_id: str, foregr
     fs = GoogleDriveFUSE(db, cache_manager, api, account_id, volume_name=vol_label)
     print(f"[VFS] Montando Google Drive ({vol_label}) em: {mount_point}")
     try:
+        _sync_gtk_bookmark(mount_point, enable_bookmark=True)
         if FUSE is not None:
-            _sync_gtk_bookmark(mount_point, enable_bookmark=False)
             FUSE(fs, mount_point, nothreads=False, foreground=foreground, allow_other=False)
     except Exception as e:
         print(f"[VFS] Montagem direta em '{mount_point}' bloqueada pelo AppArmor ({e}); ativando ponte FUSE transparente...")

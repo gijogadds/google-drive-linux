@@ -172,15 +172,24 @@ class MetadataDB:
     def get_item_by_path(self, parent_id: str, name: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            if account_id:
-                cursor.execute(
-                    "SELECT * FROM items WHERE parent_id = ? AND name = ? AND account_id = ? AND is_trashed = 0",
-                    (parent_id, name, account_id)
-                )
-            else:
-                cursor.execute("SELECT * FROM items WHERE parent_id = ? AND name = ? AND is_trashed = 0", (parent_id, name))
-            row = cursor.fetchone()
-            return dict(row) if row else None
+            names_to_try = [name]
+            if "／" in name:
+                names_to_try.append(name.replace("／", "/"))
+            if "/" in name:
+                names_to_try.append(name.replace("/", "／"))
+
+            for try_name in names_to_try:
+                if account_id:
+                    cursor.execute(
+                        "SELECT * FROM items WHERE parent_id = ? AND name = ? AND account_id = ? AND is_trashed = 0",
+                        (parent_id, try_name, account_id)
+                    )
+                else:
+                    cursor.execute("SELECT * FROM items WHERE parent_id = ? AND name = ? AND is_trashed = 0", (parent_id, try_name))
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+            return None
 
     def get_children(self, parent_id: str, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:

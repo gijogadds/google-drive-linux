@@ -346,7 +346,10 @@ class AuthManager:
 
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                data = json.loads(resp.read().decode("utf-8"))
+                if "expires_in" in data:
+                    data["expires_at"] = time.time() + float(data["expires_in"]) - 120
+                return data
         except Exception as e:
             print(f"[Auth] Erro ao trocar authorization code: {e}")
             return None
@@ -378,6 +381,10 @@ class AuthManager:
                 data = json.loads(resp.read().decode("utf-8"))
                 new_token = data.get("access_token")
                 account["tokens"]["access_token"] = new_token
+                if "expires_in" in data:
+                    account["tokens"]["expires_at"] = time.time() + float(data["expires_in"]) - 120
+                else:
+                    account["tokens"]["expires_at"] = time.time() + 3500
                 self._save_accounts_to_disk()
                 return new_token
         except Exception as e:
@@ -386,10 +393,14 @@ class AuthManager:
 
     def get_valid_token(self, account_id: str) -> Optional[str]:
         account = self.accounts.get(account_id)
-        if not account:
+        if not account or "tokens" not in account:
             return None
-        # Always verify or refresh
-        return account["tokens"].get("access_token") or self.refresh_access_token(account_id)
+        tokens = account["tokens"]
+        expires_at = tokens.get("expires_at", 0)
+        # Always proactively refresh if access_token is missing or expired
+        if not tokens.get("access_token") or time.time() >= expires_at:
+            return self.refresh_access_token(account_id)
+        return tokens.get("access_token")
 
     def get_user_profile(self, access_token: str) -> Optional[Dict[str, Any]]:
         req = urllib.request.Request(

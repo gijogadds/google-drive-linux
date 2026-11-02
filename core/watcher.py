@@ -11,7 +11,7 @@ from core.api import DriveAPI
 
 
 class SyncWorker(threading.Thread):
-    def __init__(self, db: MetadataDB, api: DriveAPI, account_id: str, poll_interval_sec: int = 30):
+    def __init__(self, db: MetadataDB, api: DriveAPI, account_id: str, poll_interval_sec: int = 60):
         super().__init__(daemon=True, name="SyncWorkerThread")
         self.db = db
         self.api = api
@@ -25,6 +25,7 @@ class SyncWorker(threading.Thread):
         self.last_synced_file = ""
         self.session_synced_count = 0
         self.last_sync_timestamp = 0
+        self.last_quota_timestamp = 0
         self.drive_total_bytes = 0
         self.resume_page_token: Optional[str] = None
         self.recent_synced_items = []
@@ -42,14 +43,14 @@ class SyncWorker(threading.Thread):
                 if not self.paused:
                     self._process_pending_operations()
 
-                    # If initial catalog scan still has pages, continue immediately; otherwise poll every poll_interval
+                    # If continuing pagination, continue gently; otherwise wait for poll_interval
                     if self.resume_page_token or (time.time() - last_poll >= self.poll_interval):
                         self.sync_remote_metadata()
                         last_poll = time.time()
             except Exception as e:
                 print(f"[SyncWorker] Erro no loop de sincronização: {e}")
 
-            time.sleep(1 if self.resume_page_token else 2)
+            time.sleep(3 if self.resume_page_token else 6)
 
     def pause(self):
         self.paused = True
@@ -222,29 +223,32 @@ class SyncWorker(threading.Thread):
         now = int(time.time())
 
         try:
-            # 1. Update storage quota
-            self._update_account_quota()
+            # Only check quota every 5 minutes and on fresh cycles
+            if not self.resume_page_token and (now - self.last_quota_timestamp > 300):
+                self._update_account_quota()
+                self.last_quota_timestamp = now
 
-            # 2. Priority sync: Root directory ('Meu Drive') so mount point is populated immediately
-            self.sync_phase = "Sincronizando pasta raiz (Meu Drive)..."
-            self.current_activity = self.sync_phase
-            root_token = None
-            while self.running and not self.paused:
-                resp = self.api.list_files(q="'root' in parents and trashed = false", page_size=500, page_token=root_token)
-                files = resp.get("files", [])
-                self._ingest_files(files, now, force_parent_root=True)
-                root_token = resp.get("nextPageToken")
-                if not root_token:
-                    break
-                time.sleep(0.8)
+            # 2. Priority sync: Root directory ('Meu Drive') on fresh cycle
+            if not self.resume_page_token:
+                self.sync_phase = "Sincronizando pasta raiz (Meu Drive)..."
+                self.current_activity = self.sync_phase
+                root_token = None
+                while self.running and not self.paused:
+                    resp = self.api.list_files(q="'root' in parents and trashed = false", page_size=500, page_token=root_token)
+                    files = resp.get("files", [])
+                    self._ingest_files(files, now, force_parent_root=True)
+                    root_token = resp.get("nextPageToken")
+                    if not root_token:
+                        break
+                    time.sleep(1.5)
 
             # 3. Map all folders across Drive on initial scan so subfolder navigation is complete
-            if not self.initial_scan_complete:
+            if not self.initial_scan_complete and not self.resume_page_token:
                 self.sync_phase = "Mapeando estrutura de pastas do Google Drive..."
                 self.current_activity = self.sync_phase
                 folder_token = None
                 folder_pages = 0
-                while self.running and not self.paused and folder_pages < 20:
+                while self.running and not self.paused and folder_pages < 10:
                     resp = self.api.list_files(
                         q="mimeType = 'application/vnd.google-apps.folder' and trashed = false",
                         page_size=1000,
@@ -256,16 +260,16 @@ class SyncWorker(threading.Thread):
                     folder_token = resp.get("nextPageToken")
                     if not folder_token:
                         break
-                    time.sleep(0.8)
+                    time.sleep(1.5)
 
             # 4. Background file tree sync continuing from resume_page_token
             page_token = self.resume_page_token
             pages_fetched = 0
-            while self.running and not self.paused and pages_fetched < 15:
+            while self.running and not self.paused and pages_fetched < 6:
                 stats = self.db.get_sync_stats(account_id=self.account_id)
                 self.sync_phase = f"Sincronizando catálogo ({stats['total_items']} itens indexados)..."
                 self.current_activity = self.sync_phase
-                resp = self.api.list_files(q="trashed = false", page_size=1000, page_token=page_token)
+                resp = self.api.list_files(q="trashed = false", page_size=500, page_token=page_token)
                 files = resp.get("files", [])
                 self._ingest_files(files, now, force_parent_root=False)
                 pages_fetched += 1
@@ -275,7 +279,7 @@ class SyncWorker(threading.Thread):
                     self.initial_scan_complete = True
                     self.resume_page_token = None
                     break
-                time.sleep(1.0)
+                time.sleep(2.0)
 
             self.last_sync_timestamp = int(time.time())
         finally:

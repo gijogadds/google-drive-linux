@@ -39,13 +39,27 @@ class DriveAPI:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     return json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
-                if e.code == 401 and attempt == 0:
+                err_body = ""
+                try:
+                    err_body = e.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    pass
+
+                is_auth_error = (e.code == 401) or (
+                    e.code == 403 and any(k in err_body for k in ("authError", "invalidCredentials", "tokenExpired", "Invalid Credentials"))
+                )
+                if is_auth_error and attempt == 0:
                     self.auth_manager.refresh_access_token(self.account_id)
                     continue
-                if e.code in (403, 429, 500, 502, 503) and attempt < 3:
-                    time.sleep(1.5 * (2 ** attempt))
+
+                if (e.code in (429, 500, 502, 503) or (e.code == 403 and "rateLimit" in err_body)) and attempt < 3:
+                    time.sleep(3.0 * (2 ** attempt))
                     continue
-                print(f"[API] HTTP {e.code} em {url.split('?')[0]}: {e}")
+
+                if "rateLimit" in err_body:
+                    print(f"[API] Google Rate Limit atingido ({e.code}), aguardando janela de requisições...")
+                else:
+                    print(f"[API] HTTP {e.code} em {url.split('?')[0]}: {e}")
                 return None
             except Exception as e:
                 print(f"[API] Erro em {url.split('?')[0]}: {e}")

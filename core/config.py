@@ -3,9 +3,11 @@ Google Drive for Linux - Configuration & Environment Manager
 """
 import os
 import json
+import shutil
 import subprocess
+import urllib.parse
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
 APP_NAME = "google-drive-linux"
 DEFAULT_MOUNT_POINT = os.path.expanduser("~/GoogleDrive")
@@ -119,15 +121,20 @@ def ensure_nautilus_mount_icons(config: Dict[str, Any]) -> bool:
         with open(tmp_fstab, "w", encoding="utf-8") as f:
             f.write(new_content)
 
+        res_ok = False
         if os.geteuid() == 0:
             shutil.copy2(tmp_fstab, fstab_path)
-            return True
+            res_ok = True
         elif os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
             res = subprocess.run(["pkexec", "cp", tmp_fstab, fstab_path], capture_output=True)
-            return res.returncode == 0
+            res_ok = (res.returncode == 0)
     except Exception as e:
         print(f"[Config] Aviso ao atualizar ícones do Nautilus em /etc/fstab: {e}")
-    return False
+        res_ok = False
+
+    sync_gtk_bookmarks(config)
+    update_workspace_desktop_entries(config)
+    return res_ok
 
 
 def ensure_apparmor_allows_mount(mount_point: str) -> bool:
@@ -455,13 +462,277 @@ def ensure_directories():
     ensure_workspace_apps_installed()
 
 
+def sync_gtk_bookmarks(config: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Ensure GTK / Nautilus bookmarks (~/.config/gtk-3.0/bookmarks) contain
+    all configured Google Drive account folders with clean labels.
+    This guarantees they show in Nautilus left sidebar and in every file dialog
+    ('Salvar como...', 'Upload de arquivo', 'Abrir arquivo...').
+    """
+    if config is None:
+        try:
+            config = _read_raw_config()
+        except Exception:
+            config = {}
+
+    bookmarks_file = os.path.expanduser("~/.config/gtk-3.0/bookmarks")
+    os.makedirs(os.path.dirname(bookmarks_file), exist_ok=True)
+
+    mounts = dict(config.get("account_mounts") or {})
+    primary_mp = config.get("mount_point")
+    if primary_mp and primary_mp not in mounts.values():
+        mounts["primary"] = primary_mp
+
+    names = dict(config.get("account_names") or {})
+
+    accounts_info = {}
+    if os.path.exists(ACCOUNTS_FILE_PATH):
+        try:
+            with open(ACCOUNTS_FILE_PATH, "r", encoding="utf-8") as f:
+                accounts_info = json.load(f)
+        except Exception:
+            pass
+
+    existing_lines = []
+    if os.path.exists(bookmarks_file):
+        try:
+            with open(bookmarks_file, "r", encoding="utf-8") as f:
+                existing_lines = [ln.strip() for ln in f if ln.strip()]
+        except Exception:
+            existing_lines = []
+
+    our_uris = set()
+    for acc_id, mp in mounts.items():
+        if mp:
+            clean_mp = os.path.abspath(mp).rstrip("/")
+            our_uris.add("file://" + urllib.parse.quote(clean_mp))
+
+    filtered_lines = []
+    for line in existing_lines:
+        parts = line.split(maxsplit=1)
+        uri = parts[0]
+        label = parts[1] if len(parts) > 1 else ""
+        if uri in our_uris:
+            continue
+        if "GoogleDrive" in label or "Google Drive" in label:
+            continue
+        filtered_lines.append(line)
+
+    is_multi = len([m for m in mounts.values() if m]) > 1
+    new_entries = []
+    for acc_id, mp in mounts.items():
+        if not mp:
+            continue
+        clean_mp = os.path.abspath(mp).rstrip("/")
+        uri = "file://" + urllib.parse.quote(clean_mp)
+
+        display = names.get(acc_id)
+        if not display and acc_id in accounts_info:
+            display = accounts_info[acc_id].get("display_name") or accounts_info[acc_id].get("email")
+        if not display:
+            display = os.path.basename(clean_mp)
+
+        if is_multi:
+            label = f"Google Drive ({display})"
+        else:
+            label = f"Google Drive ({display})" if display and display != "GoogleDrive" else "Google Drive"
+
+        new_entries.append(f"{uri} {label}")
+
+    final_lines = filtered_lines + new_entries
+    try:
+        with open(bookmarks_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(final_lines) + ("\n" if final_lines else ""))
+        return True
+    except Exception as e:
+        print(f"[Config] Aviso ao atualizar favoritos do GTK: {e}")
+        return False
+
+
+def update_workspace_desktop_entries(config: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Generate and install personalized .desktop launchers in ~/.local/share/applications/
+    with Desktop Actions for each authenticated Google account.
+    """
+    if config is None:
+        try:
+            config = _read_raw_config()
+        except Exception:
+            config = {}
+
+    accounts_info = {}
+    if os.path.exists(ACCOUNTS_FILE_PATH):
+        try:
+            with open(ACCOUNTS_FILE_PATH, "r", encoding="utf-8") as f:
+                accounts_info = json.load(f)
+        except Exception:
+            pass
+
+    account_names = dict(config.get("account_names") or {})
+    account_mounts = dict(config.get("account_mounts") or {})
+    user_apps_dir = os.path.expanduser("~/.local/share/applications")
+    os.makedirs(user_apps_dir, exist_ok=True)
+
+    launchers = {
+        "google-sheets.desktop": {
+            "name": "Google Sheets",
+            "generic": "Planilhas",
+            "comment": "Crie e edite planilhas do Google Sheets em janela de aplicativo independente",
+            "exec": "/usr/local/bin/gdrive-doc-launcher --type=sheet %f",
+            "icon": "google-sheets",
+            "categories": "Office;Spreadsheet;",
+            "mimetype": "application/vnd.google-apps.spreadsheet;application/x-google-sheets;",
+            "wmclass": "google-sheets",
+            "keywords": "Google;Sheets;Planilhas;Excel;Tabela;Drive;",
+            "doc_type": "sheet",
+            "new_label": "Nova Planilha em Branco",
+            "new_flag": "--new-sheet",
+        },
+        "google-docs.desktop": {
+            "name": "Google Docs",
+            "generic": "Editor de Textos",
+            "comment": "Crie e edite documentos do Google Docs em janela de aplicativo independente",
+            "exec": "/usr/local/bin/gdrive-doc-launcher --type=doc %f",
+            "icon": "google-docs",
+            "categories": "Office;WordProcessor;",
+            "mimetype": "application/vnd.google-apps.document;application/x-google-docs;",
+            "wmclass": "google-docs",
+            "keywords": "Google;Docs;Documentos;Word;Texto;Drive;",
+            "doc_type": "doc",
+            "new_label": "Novo Documento em Branco",
+            "new_flag": "--new-doc",
+        },
+        "google-slides.desktop": {
+            "name": "Google Slides",
+            "generic": "Apresentações",
+            "comment": "Crie e edite apresentações do Google Slides em janela de aplicativo independente",
+            "exec": "/usr/local/bin/gdrive-doc-launcher --type=slide %f",
+            "icon": "google-slides",
+            "categories": "Office;Presentation;",
+            "mimetype": "application/vnd.google-apps.presentation;application/x-google-slides;",
+            "wmclass": "google-slides",
+            "keywords": "Google;Slides;Apresentações;PowerPoint;Drive;",
+            "doc_type": "slide",
+            "new_label": "Nova Apresentação em Branco",
+            "new_flag": "--new-slide",
+        },
+    }
+
+    updated_any = False
+    for filename, meta in launchers.items():
+        doc_type = meta["doc_type"]
+        actions = ["NewItem"]
+        action_blocks = [
+            f"[Desktop Action NewItem]\n"
+            f"Name={meta['new_label']}\n"
+            f"Exec=/usr/local/bin/gdrive-doc-launcher {meta['new_flag']}"
+        ]
+
+        if len(accounts_info) > 1:
+            for acc_id, acc_data in accounts_info.items():
+                disp = account_names.get(acc_id) or acc_data.get("display_name") or acc_data.get("email") or acc_id
+                action_id = f"Acc_{acc_id}"
+                actions.append(action_id)
+                action_blocks.append(
+                    f"[Desktop Action {action_id}]\n"
+                    f"Name=Abrir com {disp}\n"
+                    f"Exec=/usr/local/bin/gdrive-doc-launcher --type={doc_type} --account={acc_id}"
+                )
+
+        actions_str = ";".join(actions) + ";"
+        content = (
+            f"[Desktop Entry]\n"
+            f"Version=1.0\n"
+            f"Name={meta['name']}\n"
+            f"GenericName={meta['generic']}\n"
+            f"Comment={meta['comment']}\n"
+            f"Exec={meta['exec']}\n"
+            f"Icon={meta['icon']}\n"
+            f"Terminal=false\n"
+            f"Type=Application\n"
+            f"Categories={meta['categories']}\n"
+            f"MimeType={meta['mimetype']}\n"
+            f"StartupNotify=true\n"
+            f"StartupWMClass={meta['wmclass']}\n"
+            f"Keywords={meta['keywords']}\n"
+            f"Actions={actions_str}\n\n"
+            + "\n\n".join(action_blocks)
+            + "\n"
+        )
+
+        dst_path = os.path.join(user_apps_dir, filename)
+        old_content = ""
+        if os.path.exists(dst_path):
+            try:
+                with open(dst_path, "r", encoding="utf-8") as f:
+                    old_content = f.read()
+            except Exception:
+                pass
+        if old_content != content:
+            try:
+                with open(dst_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                updated_any = True
+            except Exception as e:
+                print(f"[Config] Aviso ao escrever {filename}: {e}")
+
+    # Also google-drive.desktop
+    gd_actions = ["Settings"]
+    gd_action_blocks = [
+        "[Desktop Action Settings]\n"
+        "Name=Configurações do Google Drive\n"
+        "Exec=/usr/local/bin/google-drive --settings"
+    ]
+    for acc_id, acc_data in accounts_info.items():
+        disp = account_names.get(acc_id) or acc_data.get("display_name") or acc_data.get("email") or acc_id
+        mp = account_mounts.get(acc_id)
+        if mp:
+            action_id = f"Folder_{acc_id}"
+            gd_actions.append(action_id)
+            gd_action_blocks.append(
+                f"[Desktop Action {action_id}]\n"
+                f"Name=Abrir Pasta ({disp})\n"
+                f"Exec=xdg-open \"{mp}\""
+            )
+
+    gd_content = (
+        "[Desktop Entry]\n"
+        "Version=1.0\n"
+        "Name=Google Drive\n"
+        "GenericName=Sincronizador Google Drive\n"
+        "Comment=Acesso aos seus arquivos do Google Drive diretamente no Ubuntu\n"
+        "Exec=/usr/local/bin/google-drive --home\n"
+        "Icon=google-drive\n"
+        "Terminal=false\n"
+        "Type=Application\n"
+        "Categories=Network;FileTransfer;Utility;\n"
+        "StartupNotify=true\n"
+        "StartupWMClass=google-drive\n"
+        "Keywords=Google;Drive;Cloud;Nuvem;Backup;Sync;\n"
+        f"Actions={';'.join(gd_actions)};\n\n"
+        + "\n\n".join(gd_action_blocks)
+        + "\n"
+    )
+    gd_dst = os.path.join(user_apps_dir, "google-drive.desktop")
+    try:
+        with open(gd_dst, "w", encoding="utf-8") as f:
+            f.write(gd_content)
+        updated_any = True
+    except Exception:
+        pass
+
+    if updated_any:
+        subprocess.run(["update-desktop-database", user_apps_dir], stderr=subprocess.DEVNULL, check=False)
+
+    return True
+
+
 def ensure_workspace_apps_installed():
     """
     Install standalone desktop launchers for Google Drive, Google Docs, Google Sheets, and Google Slides,
     along with their icons and MIME type associations (.gdoc, .gsheet, .gslides, .gform).
     """
     try:
-        import shutil
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         desktop_dir = os.path.join(project_root, "packaging", "desktop")
         icons_dir = os.path.join(project_root, "assets", "icons")
@@ -471,15 +742,9 @@ def ensure_workspace_apps_installed():
         os.makedirs(user_apps_dir, exist_ok=True)
         os.makedirs(user_mime_pkg_dir, exist_ok=True)
 
-        # 1. Install .desktop launchers
-        needs_desktop_update = False
-        for dfile in ("google-drive.desktop", "google-docs.desktop", "google-sheets.desktop", "google-slides.desktop"):
-            src = os.path.join(desktop_dir, dfile)
-            dst = os.path.join(user_apps_dir, dfile)
-            if os.path.exists(src):
-                if not os.path.exists(dst) or os.path.getsize(src) != os.path.getsize(dst):
-                    needs_desktop_update = True
-                shutil.copy2(src, dst)
+        # 1. Install personalized .desktop launchers with multi-account support
+        update_workspace_desktop_entries()
+        sync_gtk_bookmarks()
 
         # 2. Install app and mimetype icons across themes
         icon_mappings = [
@@ -512,7 +777,7 @@ def ensure_workspace_apps_installed():
                 or os.path.getsize(mime_xml_src) != os.path.getsize(mime_xml_dst)
             )
             shutil.copy2(mime_xml_src, mime_xml_dst)
-            if needs_mime_compile or needs_desktop_update:
+            if needs_mime_compile:
                 subprocess.run(
                     ["update-mime-database", os.path.expanduser("~/.local/share/mime")],
                     stderr=subprocess.DEVNULL,
@@ -562,6 +827,8 @@ def save_config(config: Dict[str, Any]):
     ensure_directories()
     with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+    sync_gtk_bookmarks(config)
+    update_workspace_desktop_entries(config)
 
 
 def suggest_account_mount_point(config: Dict[str, Any], email: str = "", is_primary: bool = False, custom_name: str = "") -> str:
