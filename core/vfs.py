@@ -52,6 +52,8 @@ class GoogleDriveFUSE(Operations):
         self.api = api
         self.account_id = account_id
         self.volume_name = volume_name or "GoogleDrive"
+        self.mount_time = int(time.time())
+        self.root_mtime = self.mount_time
         self.open_files: Dict[int, Dict[str, Any]] = {}
         self.fh_counter = 1
         self._hydrated_dirs = set()
@@ -138,7 +140,7 @@ class GoogleDriveFUSE(Operations):
     def _resolve_item(self, path: str) -> Optional[Dict[str, Any]]:
         """Resolve a POSIX path (e.g. /Folder/Subfolder/file.pdf) to an item record in SQLite."""
         if path in ("/", ""):
-            return {"id": "root", "name": "root", "is_directory": 1, "size": 0, "modified_time": int(time.time())}
+            return {"id": "root", "name": "root", "is_directory": 1, "size": 0, "modified_time": self.root_mtime}
         vdata = self._get_virtual_volume_file(path)
         if vdata is not None:
             return {
@@ -146,7 +148,7 @@ class GoogleDriveFUSE(Operations):
                 "name": os.path.basename(path),
                 "is_directory": 0,
                 "size": len(vdata),
-                "modified_time": int(time.time()),
+                "modified_time": self.mount_time,
                 "_virtual_bytes": vdata,
             }
 
@@ -186,8 +188,7 @@ class GoogleDriveFUSE(Operations):
         if not item:
             raise FuseOSError(errno.ENOENT)
 
-        now = int(time.time())
-        mtime = item.get("modified_time") or now
+        mtime = item.get("modified_time") or self.mount_time
 
         uid = os.getuid()
         gid = os.getgid()
@@ -224,6 +225,25 @@ class GoogleDriveFUSE(Operations):
                 "st_mtime": mtime,
                 "st_atime": mtime
             }
+
+    def statfs(self, path: str) -> Dict[str, Any]:
+        """Return filesystem capacity statistics for df, Nautilus, and GIO."""
+        block_size = 4096
+        # Report 1 TB capacity with ~800 GB available
+        total_blocks = (1024 * 1024 * 1024 * 1024) // block_size
+        free_blocks = (800 * 1024 * 1024 * 1024) // block_size
+        return {
+            "f_bsize": block_size,
+            "f_frsize": block_size,
+            "f_blocks": total_blocks,
+            "f_bfree": free_blocks,
+            "f_bavail": free_blocks,
+            "f_files": 1000000,
+            "f_ffree": 900000,
+            "f_favail": 900000,
+            "f_flag": 0,
+            "f_namemax": 255,
+        }
 
     def readdir(self, path: str, fh) -> List[str]:
         item = self._resolve_item(path)
@@ -363,6 +383,7 @@ class GoogleDriveFUSE(Operations):
             del self.open_files[fh]
 
     def create(self, path: str, mode: int, fi=None) -> int:
+        self.root_mtime = int(time.time())
         parent_path, name = os.path.split(path)
         parent_item = self._resolve_item(parent_path)
         if not parent_item:
@@ -399,6 +420,7 @@ class GoogleDriveFUSE(Operations):
         return fh
 
     def mkdir(self, path: str, mode: int):
+        self.root_mtime = int(time.time())
         parent_path, name = os.path.split(path)
         parent_item = self._resolve_item(parent_path)
         if not parent_item:
@@ -430,6 +452,7 @@ class GoogleDriveFUSE(Operations):
         )
 
     def unlink(self, path: str):
+        self.root_mtime = int(time.time())
         item = self._resolve_item(path)
         if not item:
             raise FuseOSError(errno.ENOENT)
@@ -443,6 +466,7 @@ class GoogleDriveFUSE(Operations):
         self.unlink(path)
 
     def rename(self, old: str, new: str):
+        self.root_mtime = int(time.time())
         item = self._resolve_item(old)
         if not item:
             raise FuseOSError(errno.ENOENT)
