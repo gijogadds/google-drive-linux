@@ -97,6 +97,49 @@ class UbuntuCompatibilityAuditor:
             "Garante que actions/setup-python@v5 com cache: 'pip' encontre requirements.txt no CI."
         )
 
+        self.audit_search_runtime()
+
+    def audit_search_runtime(self):
+        from unittest.mock import MagicMock, patch
+        from ui import webview_window
+
+        for live_typing in (False, True):
+            db = MagicMock()
+            db.get_accounts.return_value = []
+            db.search_items.return_value = []
+            window = webview_window.GoogleDriveHomeWindow({}, db)
+            window.window = object()
+            for name in ("stack", "search_title_lbl", "search_local_list", "search_cloud_list",
+                         "lbl_search_local_hdr", "lbl_search_cloud_hdr"):
+                setattr(window, name, MagicMock())
+            window.search_local_list.get_children.return_value = []
+            window.search_cloud_list.get_children.return_value = []
+
+            try:
+                with patch.object(webview_window, "Gtk", create=True), \
+                     patch.object(webview_window, "GLib", create=True) as glib, \
+                     patch.object(webview_window.threading, "Thread") as thread, \
+                     patch("time.sleep") as sleep:
+                    glib.markup_escape_text.side_effect = lambda text: text
+                    if live_typing:
+                        window._on_search_changed(MagicMock(get_text=lambda: "test"))
+                    else:
+                        window._on_search("test")
+
+                    db.search_items.assert_called_once_with("test", limit=60)
+                    assert isinstance(window._last_search_token, float)
+                    thread.return_value.start.assert_called_once_with()
+                    thread.call_args.kwargs["target"]()
+                    if live_typing:
+                        sleep.assert_called_once_with(0.25)
+                    else:
+                        sleep.assert_not_called()
+                    glib.idle_add.assert_called_once()
+                    glib.idle_add.call_args.args[0]()
+                self.record(f"Busca {'ao digitar' if live_typing else 'enviada'} sem erro de tempo", True)
+            except Exception as exc:
+                self.record(f"Busca {'ao digitar' if live_typing else 'enviada'} sem erro de tempo", False, str(exc))
+
     def audit_fuse3_interface(self):
         print("\n[AUDITORIA 2/8] Subsistema FUSE 3 (libfuse3 em Espaço de Usuário)...")
         from core.vfs import GoogleDriveFUSE, FuseOSError
