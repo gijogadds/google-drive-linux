@@ -1,0 +1,26 @@
+name: Gemini Triage
+on:
+  issues:
+    types: [opened]
+permissions:
+  issues: write
+  contents: read
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Check secret
+        if: env.GEMINI_API_KEY == ''
+        run: echo "::warning::GEMINI_API_KEY não configurado; triagem ignorada."
+      - uses: google-github-actions/run-gemini-cli@v0
+        if: env.GEMINI_API_KEY != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          gemini_api_key: ${{ env.GEMINI_API_KEY }}
+          prompt: |
+            Analise a issue #${{ github.event.issue.number }} deste repositório.
+            Comente com causa provável, arquivos envolvidos e critérios de aceite.
+            Se estiver clara, aplique a label "ready"; senão, aplique "needs-info".
