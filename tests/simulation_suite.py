@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import time
 import json
+import errno
 
 # Setup import path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,7 +25,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from core.config import DEFAULT_CONFIG
 from core.db import MetadataDB
-from core.vfs import GoogleDriveFUSE
+from core.vfs import GoogleDriveFUSE, FuseOSError
 from core.cache import CacheManager
 from core.doc_launcher import get_doc_url, find_browser_for_app_mode
 from updater.omaha_updater import OmahaUpdater
@@ -213,6 +214,45 @@ def run_simulation():
         print(f"  ✓ Streaming sob demanda validado: {len(data_read) // (1024*1024)} MB lidos cruzando blocos.")
         print(f"      Bloco 0 (0-16MB): {os.path.getsize(chunk0)} bytes em disco")
         print(f"      Bloco 1 (16-32MB): {os.path.getsize(chunk1)} bytes em disco")
+
+        class NoRangeDriveAPI(MockDriveAPI):
+            def read_range(self, file_id, offset, length):
+                return b""
+
+        fallback_cache = CacheManager(
+            db=db,
+            api=NoRangeDriveAPI(),
+            chunk_size_mb=16,
+            max_cache_size_gb=1,
+            cache_dir=os.path.join(cache_dir, "fallback"),
+        )
+        fallback_read = fallback_cache.read("large_file", 0, 1024, 35 * 1024 * 1024)
+        assert fallback_read == b"X" * 1024, "A cópia deveria recuperar o conteúdo via download completo"
+
+        class UnavailableDriveAPI(NoRangeDriveAPI):
+            def download_full_file(self, file_id, dest_path):
+                return False
+
+        incomplete_cache = CacheManager(
+            db=db,
+            api=UnavailableDriveAPI(),
+            chunk_size_mb=16,
+            max_cache_size_gb=1,
+            cache_dir=os.path.join(cache_dir, "incomplete"),
+        )
+        try:
+            incomplete_cache.read("large_file", 0, 1024, 35 * 1024 * 1024)
+            raise AssertionError("Uma leitura de intervalo incompleta não deveria parecer EOF")
+        except OSError:
+            pass
+
+        incomplete_fuse = GoogleDriveFUSE(db, incomplete_cache, UnavailableDriveAPI(), "acc_001")
+        try:
+            incomplete_fuse.read("/Projetos 2026/Video_Apresentacao.mp4", 1024, 0, 0)
+            raise AssertionError("Uma falha de hidratação deveria retornar EIO ao FUSE")
+        except FuseOSError as exc:
+            assert exc.errno == errno.EIO, f"Esperado EIO, obtido {exc.errno}"
+
         passed_tests += 1
 
         # -------------------------------------------------------------

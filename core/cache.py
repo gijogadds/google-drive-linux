@@ -99,8 +99,16 @@ class CacheManager:
             return b""
 
         data = self.api.read_range(item_id, chunk_offset, chunk_len)
-        if not data:
-            return b""
+        if len(data) != chunk_len:
+            full_path = self._get_full_cache_path(item_id)
+            if self.api.download_full_file(item_id, full_path) and os.path.getsize(full_path) == total_size:
+                with open(full_path, "rb") as f:
+                    f.seek(chunk_offset)
+                    data = f.read(chunk_len)
+            elif os.path.exists(full_path):
+                os.remove(full_path)
+            if len(data) != chunk_len:
+                raise OSError(f"Incomplete range read: expected {chunk_len} bytes, got {len(data)}")
 
         # Save to disk
         with open(chunk_path, "wb") as f:

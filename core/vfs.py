@@ -349,7 +349,10 @@ class GoogleDriveFUSE(Operations):
 
         total_size = item.get("size") or 0
         # Stream slice via Chunked Sparse Cache Manager
-        return self.cache.read(item["id"], offset, size, total_size)
+        try:
+            return self.cache.read(item["id"], offset, size, total_size)
+        except OSError:
+            raise FuseOSError(errno.EIO)
 
     def write(self, path: str, data: bytes, offset: int, fh: int) -> int:
         file_info = self.open_files.get(fh)
