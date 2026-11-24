@@ -57,6 +57,8 @@ class GoogleDriveFUSE(Operations):
         self.open_files: Dict[int, Dict[str, Any]] = {}
         self.fh_counter = 1
         self._hydrated_dirs = set()
+        from core.ignore import IgnoreRulesEngine
+        self.ignore_engine = IgnoreRulesEngine()
         self._icon_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "assets", "icons", "drive_fs.png"
@@ -141,6 +143,8 @@ class GoogleDriveFUSE(Operations):
         """Resolve a POSIX path (e.g. /Folder/Subfolder/file.pdf) to an item record in SQLite."""
         if path in ("/", ""):
             return {"id": "root", "name": "root", "is_directory": 1, "size": 0, "modified_time": self.root_mtime}
+        if path == "/Compartilhados comigo":
+            return {"id": "__shared__", "name": "Compartilhados comigo", "is_directory": 1, "size": 0, "modified_time": self.mount_time}
         vdata = self._get_virtual_volume_file(path)
         if vdata is not None:
             return {
@@ -154,6 +158,9 @@ class GoogleDriveFUSE(Operations):
 
         parts = [p for p in path.strip("/").split("/") if p]
         current_parent = "root"
+        if parts and parts[0] == "Compartilhados comigo":
+            current_parent = "__shared__"
+            parts = parts[1:]
         item = None
 
         for part in parts:
@@ -227,11 +234,23 @@ class GoogleDriveFUSE(Operations):
             }
 
     def statfs(self, path: str) -> Dict[str, Any]:
-        """Return filesystem capacity statistics for df, Nautilus, and GIO."""
+        """Return filesystem capacity statistics for df, Nautilus, and GIO using real account quota when available."""
         block_size = 4096
-        # Report 1 TB capacity with ~800 GB available
-        total_blocks = (1024 * 1024 * 1024 * 1024) // block_size
-        free_blocks = (800 * 1024 * 1024 * 1024) // block_size
+        total_bytes = 1024 * 1024 * 1024 * 1024
+        free_bytes = 800 * 1024 * 1024 * 1024
+        try:
+            for acc in self.db.get_accounts():
+                if acc.get("account_id") == self.account_id:
+                    t = int(acc.get("storage_total") or 0)
+                    u = int(acc.get("storage_used") or 0)
+                    if t > 0:
+                        total_bytes = t
+                        free_bytes = max(0, t - u)
+                    break
+        except Exception:
+            pass
+        total_blocks = max(1, total_bytes // block_size)
+        free_blocks = max(0, free_bytes // block_size)
         return {
             "f_bsize": block_size,
             "f_frsize": block_size,
@@ -251,7 +270,16 @@ class GoogleDriveFUSE(Operations):
             raise FuseOSError(errno.ENOENT)
 
         dirents = [".", ".."]
-        children = self.db.get_children(item["id"], account_id=self.account_id)
+        if item["id"] == "__shared__":
+            children = self.db.get_shared_items(account_id=self.account_id)
+        else:
+            children = self.db.get_children(item["id"], account_id=self.account_id)
+            if item["id"] == "root":
+                try:
+                    if self.db.get_shared_items(account_id=self.account_id):
+                        dirents.append("Compartilhados comigo")
+                except Exception:
+                    pass
         # On-demand folder hydration if directory appears empty and hasn't been fetched yet
         if not children and item["id"] not in self._hydrated_dirs and hasattr(self.api, "list_files"):
             self._hydrated_dirs.add(item["id"])
@@ -367,17 +395,23 @@ class GoogleDriveFUSE(Operations):
 
     def flush(self, path: str, fh: int):
         file_info = self.open_files.get(fh)
-        if file_info and file_info["write_buffer"]:
-            # Commit dirty file buffer to cache and queue upload
+        if file_info and file_info["write_buffer"] is not None and len(file_info["write_buffer"]) > 0:
             item = file_info["item"]
             data = bytes(file_info["write_buffer"])
+            # Clear buffer after committing so release() does not queue a duplicate upload
+            file_info["write_buffer"].clear()
+            rel_path = path.lstrip("/")
+            if self.ignore_engine.is_ignored(rel_path, is_dir=False):
+                return
             local_cache_path = self.cache.write_direct(item["id"], data)
+            is_new = str(item["id"]).startswith("local_")
             self.db.queue_operation(
                 account_id=self.account_id,
-                op_type="upload_modify",
+                op_type="upload_new" if is_new else "upload_modify",
                 item_id=item["id"],
                 source_path=local_cache_path,
-                total_bytes=len(data)
+                target_path=item.get("parent_id", "root") if is_new else None,
+                total_bytes=len(data),
             )
 
     def release(self, path: str, fh: int):
@@ -447,12 +481,13 @@ class GoogleDriveFUSE(Operations):
             "local_cache_path": None
         }
         self.db.upsert_item(new_dir)
-        self.db.queue_operation(
-            account_id=self.account_id,
-            op_type="mkdir",
-            item_id=new_id,
-            target_path=name
-        )
+        if not self.ignore_engine.is_ignored(path.lstrip("/"), is_dir=True):
+            self.db.queue_operation(
+                account_id=self.account_id,
+                op_type="mkdir",
+                item_id=new_id,
+                target_path=name
+            )
 
     def unlink(self, path: str):
         self.root_mtime = int(time.time())

@@ -144,6 +144,86 @@ def cmd_set_path(args):
         print("Uso: gdrive-cli set-path --mount /caminho/hd_externa --cache /caminho/hd_externa/cache")
 
 
+def cmd_local_sync(args):
+    db = MetadataDB()
+    accounts = db.get_accounts()
+    if not accounts:
+        print("[CLI] Nenhuma conta conectada.")
+        return
+    acc_id = args.account or accounts[0]["account_id"]
+
+    if args.action == "list":
+        rules = db.get_local_sync_rules(enabled_only=False)
+        if not rules:
+            print("[CLI] Nenhuma pasta de Sincronização Local Seletiva configurada.")
+            return
+        for r in rules:
+            status = "ATIVA" if r["enabled"] else "PAUSADA"
+            print(f"[{r['id']}] {r['local_path']} <-> cloud:{r['cloud_folder_id']} | modo={r['sync_mode']} | docs={r['export_mode']} | {status}")
+    elif args.action == "add":
+        if not args.path:
+            print("Uso: gdrive-cli local-sync add --path /pasta/local [--mode TWO_WAY|UPLOAD_ONLY|DOWNLOAD_ONLY] [--cloud-id root] [--export LINK|OPEN_DOCUMENT|MS_OFFICE]")
+            return
+        db.upsert_local_sync_rule(
+            account_id=acc_id,
+            local_path=args.path,
+            cloud_folder_id=args.cloud_id or "root",
+            sync_mode=(args.mode or "TWO_WAY").upper(),
+            export_mode=(args.export or "OPEN_DOCUMENT").upper(),
+        )
+        print(f"[CLI] Regra Local Selective Sync salva: {os.path.abspath(os.path.expanduser(args.path))} ({args.mode or 'TWO_WAY'})")
+    elif args.action == "remove":
+        if not args.path:
+            print("Uso: gdrive-cli local-sync remove --path /pasta/local")
+            return
+        db.delete_local_sync_rule(args.path)
+        print(f"[CLI] Regra removida: {args.path}")
+
+
+def cmd_ignore(args):
+    from core.ignore import IgnoreRulesEngine
+    eng = IgnoreRulesEngine()
+    if args.action == "show":
+        print(eng.get_rules_text())
+    elif args.action == "add" and args.pattern:
+        txt = eng.get_rules_text().rstrip() + "\n" + args.pattern + "\n"
+        eng.save_rules_text(txt)
+        print(f"[CLI] Regra adicionada: {args.pattern}")
+    elif args.action == "test" and args.pattern:
+        res = eng.is_ignored(args.pattern, is_dir=args.pattern.endswith("/"))
+        print(f"[CLI] '{args.pattern}' -> {'IGNORADO' if res else 'SINCRONIZADO'}")
+    else:
+        print("Uso: gdrive-cli ignore show | add <padrao> | test <caminho_relativo>")
+
+
+def cmd_conflicts(args):
+    db = MetadataDB()
+    items = db.get_pending_conflicts()
+    if not items:
+        print("[CLI] Nenhum conflito pendente.")
+        return
+    for c in items:
+        print(f"[#{c['id']}] {c['conflict_type']} | nuvem='{c['cloud_name']}' | local='{c['local_path']}'")
+
+
+def cmd_activity(args):
+    db = MetadataDB()
+    logs = db.get_activity_log(limit=args.limit or 30)
+    if not logs:
+        print("[CLI] Nenhuma atividade registrada ainda.")
+        return
+    import time as _t
+    for row in logs:
+        ts = _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(row["created_at"]))
+        print(f"[{ts}] [{row['action_type']}] {row['item_name']} — {row['details']}")
+
+
+def cmd_audit(args):
+    import subprocess
+    audit_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "audit_and_test.py")
+    sys.exit(subprocess.call([sys.executable, audit_script]))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Google Drive para Linux - CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -153,6 +233,24 @@ def main():
     subparsers.add_parser("update", help="Verifica novas versões oficiais da Google (Omaha)")
     subparsers.add_parser("upgrade", help="Verifica e aplica correções de código diretamente do GitHub")
     subparsers.add_parser("mcp", help="Inicia o servidor MCP local para agentes de IA")
+    subparsers.add_parser("conflicts", help="Lista conflitos de sincronização pendentes")
+    subparsers.add_parser("audit", help="Executa bateria completa de testes e auditoria do sistema")
+
+    p_act = subparsers.add_parser("activity", help="Exibe feed estruturado de atividades recentes")
+    p_act.add_argument("--limit", type=int, default=30)
+
+    p_ls = subparsers.add_parser("local-sync", help="Gerencia pastas de Sincronização Local Seletiva (2-way / 1-way)")
+    p_ls.add_argument("action", choices=["list", "add", "remove"])
+    p_ls.add_argument("--path", help="Caminho da pasta local")
+    p_ls.add_argument("--mode", choices=["TWO_WAY", "UPLOAD_ONLY", "DOWNLOAD_ONLY"], default="TWO_WAY")
+    p_ls.add_argument("--cloud-id", default="root")
+    p_ls.add_argument("--export", choices=["LINK", "OPEN_DOCUMENT", "MS_OFFICE"], default="OPEN_DOCUMENT")
+    p_ls.add_argument("--account", default=None)
+
+    p_ign = subparsers.add_parser("ignore", help="Gerencia regras de exclusão (.gitignore)")
+    p_ign.add_argument("action", choices=["show", "add", "test"])
+    p_ign.add_argument("pattern", nargs="?", default=None)
+
     parser_rep = subparsers.add_parser("report", help="Gera diagnóstico e abre Issue para resolução de problemas")
     parser_rep.add_argument("-m", "--message", help="Mensagem ou descrição do problema observado (opcional)", default=None)
 
@@ -175,6 +273,16 @@ def main():
         cmd_report(args)
     elif args.command == "set-path":
         cmd_set_path(args)
+    elif args.command == "local-sync":
+        cmd_local_sync(args)
+    elif args.command == "ignore":
+        cmd_ignore(args)
+    elif args.command == "conflicts":
+        cmd_conflicts(args)
+    elif args.command == "activity":
+        cmd_activity(args)
+    elif args.command == "audit":
+        cmd_audit(args)
     else:
         parser.print_help()
 

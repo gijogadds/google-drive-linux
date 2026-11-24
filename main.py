@@ -47,6 +47,7 @@ from core.api import DriveAPI
 from core.cache import CacheManager
 from core.vfs import mount_fuse
 from core.watcher import SyncWorker
+from core.local_sync import LocalSyncWorker
 from updater.omaha_updater import OmahaUpdater
 from updater.github_updater import GitHubUpdater
 from ui.indicator import DriveTrayIndicator
@@ -220,7 +221,7 @@ class GoogleDriveDaemon:
             mount_pt = get_account_mount_point(self.config, acc_id, email=email, is_primary=is_primary)
 
             if acc_id not in self.account_runtimes:
-                api = DriveAPI(self.auth, acc_id)
+                api = DriveAPI(self.auth, acc_id, proxy_config=self.config.get("proxy_config"))
                 base_cache = self.config.get("cache_dir") or os.path.expanduser("~/.cache/google-drive-linux")
                 acc_cache_dir = base_cache if is_primary else os.path.join(base_cache, f"acc_{acc_id}")
                 cache = CacheManager(
@@ -230,12 +231,27 @@ class GoogleDriveDaemon:
                     max_cache_size_gb=self.config.get("max_cache_size_gb", 10),
                     cache_dir=acc_cache_dir
                 )
-                worker = SyncWorker(db=self.db, api=api, account_id=acc_id)
+                worker = SyncWorker(
+                    db=self.db,
+                    api=api,
+                    account_id=acc_id,
+                    cache_manager=cache,
+                    config=self.config,
+                    max_workers=self.config.get("max_sync_workers", 4),
+                )
                 worker.start()
+                local_worker = LocalSyncWorker(
+                    db=self.db,
+                    api=api,
+                    account_id=acc_id,
+                    config=self.config,
+                )
+                local_worker.start()
                 self.account_runtimes[acc_id] = {
                     "api": api,
                     "cache": cache,
                     "sync_worker": worker,
+                    "local_sync_worker": local_worker,
                     "fuse_thread": None,
                     "mount_point": mount_pt,
                     "email": email,
@@ -463,6 +479,9 @@ class GoogleDriveDaemon:
             worker = rt.get("sync_worker")
             if worker:
                 worker.stop()
+            lworker = rt.get("local_sync_worker")
+            if lworker:
+                lworker.stop()
         mount_pt = self.config.get("mount_point", DEFAULT_MOUNT_POINT)
         unmount_fuse_path(mount_pt, remove_if_empty=False)
         if os.path.exists(IPC_SOCKET_PATH):

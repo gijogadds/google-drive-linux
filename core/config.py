@@ -45,7 +45,24 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_mcp_server": True,
     "start_at_login": True,
     "notifications_enabled": True,
-    "docs_engine": "native"
+    "docs_engine": "native",
+    "docs_export_mode": "LINK",            # 'LINK' | 'OPEN_DOCUMENT' | 'MS_OFFICE'
+    "missing_file_behavior": "UNSYNC",     # 'UNSYNC' (safe default) | 'DELETE'
+    "max_sync_workers": 4,                 # Bounded parallel transfers per account (1-12)
+    "conflict_policies": {
+        "LOCAL_EDIT_CLOUD_EDIT": "KEEP_BOTH",
+        "LOCAL_EDIT_CLOUD_DELETE": "KEEP_LOCAL",
+        "LOCAL_EDIT_UNSYNC": "KEEP_LOCAL",
+        "LOCAL_DELETE_CLOUD_EDIT": "KEEP_CLOUD",
+    },
+    "proxy_config": {
+        "mode": "SYSTEM",                  # 'NONE' | 'SYSTEM' | 'MANUAL'
+        "type": "HTTP",
+        "host": None,
+        "port": None,
+        "username": None,
+        "password": None,
+    },
 }
 
 

@@ -107,6 +107,74 @@ class MetadataDB:
             );
             """)
 
+            # Incremental Delta Sync Tokens (Drive API v3 changes.list)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sync_tokens (
+                account_id TEXT PRIMARY KEY,
+                changes_page_token TEXT,
+                initial_scan_complete INTEGER DEFAULT 0,
+                updated_at INTEGER DEFAULT 0
+            );
+            """)
+
+            # Unresolved / Historical Sync Conflicts
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS conflicts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                item_id TEXT,
+                conflict_type TEXT NOT NULL,
+                local_path TEXT,
+                cloud_name TEXT,
+                local_md5 TEXT,
+                cloud_md5 TEXT,
+                resolution TEXT DEFAULT 'pending',
+                created_at INTEGER,
+                resolved_at INTEGER
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_conflicts_status ON conflicts(account_id, resolution);")
+
+            # Structured Activity Feed Log
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                item_id TEXT,
+                item_name TEXT,
+                details TEXT,
+                created_at INTEGER NOT NULL
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC);")
+
+            # Hybrid Local Selective Sync Rules (2-way / 1-way upload / 1-way download)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS local_sync_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                local_path TEXT NOT NULL UNIQUE,
+                cloud_folder_id TEXT NOT NULL DEFAULT 'root',
+                sync_mode TEXT NOT NULL DEFAULT 'TWO_WAY',
+                export_mode TEXT NOT NULL DEFAULT 'LINK',
+                enabled INTEGER DEFAULT 1,
+                last_item_count INTEGER DEFAULT 0,
+                created_at INTEGER,
+                updated_at INTEGER
+            );
+            """)
+
+            # Safe non-destructive schema migrations for existing DBs
+            existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(items)").fetchall()}
+            for col_name, col_def in (
+                ("is_shared", "INTEGER DEFAULT 0"),
+                ("drive_id", "TEXT DEFAULT ''"),
+                ("is_starred", "INTEGER DEFAULT 0"),
+            ):
+                if col_name not in existing_cols:
+                    cursor.execute(f"ALTER TABLE items ADD COLUMN {col_name} {col_def};")
+
             conn.commit()
 
     # --- Item CRUD ---
@@ -128,7 +196,10 @@ class MetadataDB:
             "is_pinned": 0,
             "is_trashed": 0,
             "sync_status": "online_only",
-            "local_cache_path": None
+            "local_cache_path": None,
+            "is_shared": 0,
+            "drive_id": "",
+            "is_starred": 0,
         }
         batch = []
         for item_data in items_list:
@@ -142,11 +213,13 @@ class MetadataDB:
             INSERT INTO items (
                 id, account_id, name, parent_id, mime_type, is_directory,
                 size, md5_checksum, modified_time, created_time,
-                is_pinned, is_trashed, sync_status, local_cache_path
+                is_pinned, is_trashed, sync_status, local_cache_path,
+                is_shared, drive_id, is_starred
             ) VALUES (
                 :id, :account_id, :name, :parent_id, :mime_type, :is_directory,
                 :size, :md5_checksum, :modified_time, :created_time,
-                :is_pinned, :is_trashed, :sync_status, :local_cache_path
+                :is_pinned, :is_trashed, :sync_status, :local_cache_path,
+                :is_shared, :drive_id, :is_starred
             )
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -156,7 +229,11 @@ class MetadataDB:
                 size=excluded.size,
                 md5_checksum=excluded.md5_checksum,
                 modified_time=excluded.modified_time,
+                is_pinned=MAX(items.is_pinned, excluded.is_pinned),
                 is_trashed=excluded.is_trashed,
+                is_shared=MAX(items.is_shared, excluded.is_shared),
+                drive_id=CASE WHEN excluded.drive_id != '' THEN excluded.drive_id ELSE items.drive_id END,
+                is_starred=excluded.is_starred,
                 sync_status=CASE WHEN items.is_pinned=1 THEN 'pinned' ELSE excluded.sync_status END,
                 local_cache_path=coalesce(items.local_cache_path, excluded.local_cache_path);
             """, batch)
@@ -406,4 +483,197 @@ class MetadataDB:
                 auth_data=excluded.auth_data,
                 last_sync=excluded.last_sync;
             """, account_data)
+            conn.commit()
+
+    # --- Incremental Delta Sync Tokens ---
+    def get_sync_token(self, account_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM sync_tokens WHERE account_id = ?", (account_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def save_sync_token(self, account_id: str, page_token: Optional[str], initial_scan_complete: bool = True):
+        now = int(time.time())
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO sync_tokens (account_id, changes_page_token, initial_scan_complete, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    changes_page_token = COALESCE(excluded.changes_page_token, sync_tokens.changes_page_token),
+                    initial_scan_complete = MAX(sync_tokens.initial_scan_complete, excluded.initial_scan_complete),
+                    updated_at = excluded.updated_at;
+            """, (account_id, page_token, 1 if initial_scan_complete else 0, now))
+            conn.commit()
+
+    def mark_item_trashed(self, item_id: str, trashed: bool = True):
+        with self._get_connection() as conn:
+            conn.execute("UPDATE items SET is_trashed = ? WHERE id = ?", (1 if trashed else 0, item_id))
+            conn.commit()
+
+    def replace_synthetic_id(self, old_id: str, new_id: str):
+        """Promote a temporary local_* synthetic ID to its real Google Drive ID."""
+        if not old_id or not new_id or old_id == new_id:
+            return
+        with self._get_connection() as conn:
+            conn.execute("UPDATE items SET parent_id = ? WHERE parent_id = ?", (new_id, old_id))
+            conn.execute("UPDATE operations SET item_id = ? WHERE item_id = ?", (new_id, old_id))
+            conn.execute("DELETE FROM items WHERE id = ?", (old_id,))
+            conn.commit()
+
+    # --- Offline Pinning Helpers ---
+    def get_pinned_items_needing_hydration(self, account_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return pinned non-directory files that do not yet have a local_cache_path on disk."""
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM items
+                WHERE account_id = ? AND is_pinned = 1 AND is_directory = 0 AND is_trashed = 0
+                LIMIT ?
+            """, (account_id, limit)).fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                lp = d.get("local_cache_path")
+                if not lp or not os.path.exists(lp):
+                    result.append(d)
+            return result
+
+    def get_shared_items(self, account_id: str) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM items
+                WHERE account_id = ? AND is_shared = 1 AND is_trashed = 0
+                ORDER BY is_directory DESC, name ASC
+            """, (account_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    # --- Conflicts ---
+    def record_conflict(
+        self,
+        account_id: str,
+        item_id: str,
+        conflict_type: str,
+        local_path: str = "",
+        cloud_name: str = "",
+        local_md5: str = "",
+        cloud_md5: str = "",
+        resolution: str = "pending",
+    ) -> int:
+        now = int(time.time())
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO conflicts (account_id, item_id, conflict_type, local_path, cloud_name, local_md5, cloud_md5, resolution, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (account_id, item_id, conflict_type, local_path, cloud_name, local_md5, cloud_md5, resolution, now))
+            conn.commit()
+            return cur.lastrowid
+
+    def get_pending_conflicts(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            if account_id:
+                rows = conn.execute(
+                    "SELECT * FROM conflicts WHERE account_id = ? AND resolution = 'pending' ORDER BY created_at DESC",
+                    (account_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM conflicts WHERE resolution = 'pending' ORDER BY created_at DESC"
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def resolve_conflict(self, conflict_id: int, resolution: str):
+        now = int(time.time())
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE conflicts SET resolution = ?, resolved_at = ? WHERE id = ?",
+                (resolution, now, conflict_id),
+            )
+            conn.commit()
+
+    # --- Structured Activity Feed ---
+    def log_activity(self, account_id: str, action_type: str, item_id: str = "", item_name: str = "", details: str = ""):
+        now = int(time.time())
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO activity_log (account_id, action_type, item_id, item_name, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (account_id, action_type, item_id, item_name, details, now))
+            # Keep activity table bounded to latest 2000 entries
+            conn.execute("""
+                DELETE FROM activity_log WHERE id NOT IN (
+                    SELECT id FROM activity_log ORDER BY id DESC LIMIT 2000
+                )
+            """)
+            conn.commit()
+
+    def get_activity_log(self, account_id: Optional[str] = None, action_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        clauses = []
+        params = []
+        if account_id:
+            clauses.append("account_id = ?")
+            params.append(account_id)
+        if action_type:
+            clauses.append("action_type = ?")
+            params.append(action_type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM activity_log {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # --- Local Selective Sync Rules ---
+    def upsert_local_sync_rule(
+        self,
+        account_id: str,
+        local_path: str,
+        cloud_folder_id: str = "root",
+        sync_mode: str = "TWO_WAY",
+        export_mode: str = "LINK",
+        enabled: bool = True,
+    ):
+        now = int(time.time())
+        clean_path = os.path.abspath(os.path.expanduser(local_path))
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO local_sync_rules (account_id, local_path, cloud_folder_id, sync_mode, export_mode, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(local_path) DO UPDATE SET
+                    account_id = excluded.account_id,
+                    cloud_folder_id = excluded.cloud_folder_id,
+                    sync_mode = excluded.sync_mode,
+                    export_mode = excluded.export_mode,
+                    enabled = excluded.enabled,
+                    updated_at = excluded.updated_at;
+            """, (account_id, clean_path, cloud_folder_id, sync_mode, export_mode, 1 if enabled else 0, now, now))
+            conn.commit()
+
+    def get_local_sync_rules(self, account_id: Optional[str] = None, enabled_only: bool = True) -> List[Dict[str, Any]]:
+        clauses = []
+        params = []
+        if account_id:
+            clauses.append("account_id = ?")
+            params.append(account_id)
+        if enabled_only:
+            clauses.append("enabled = 1")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._get_connection() as conn:
+            rows = conn.execute(f"SELECT * FROM local_sync_rules {where} ORDER BY id ASC", tuple(params)).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_local_sync_rule_count(self, rule_id: int, item_count: int):
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE local_sync_rules SET last_item_count = ?, updated_at = ? WHERE id = ?",
+                (item_count, int(time.time()), rule_id),
+            )
+            conn.commit()
+
+    def delete_local_sync_rule(self, local_path: str):
+        clean_path = os.path.abspath(os.path.expanduser(local_path))
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM local_sync_rules WHERE local_path = ?", (clean_path,))
             conn.commit()
