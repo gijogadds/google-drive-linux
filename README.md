@@ -1,256 +1,225 @@
 # Google Drive para Linux (Ubuntu) 🚀
 
-Cliente nativo e de alta performance do **Google Drive para Ubuntu e distribuições Linux**, desenvolvido através de engenharia reversa do cliente oficial do Windows (`Google Drive for Desktop / Drive File Stream`). 
+Cliente nativo, híbrido e de alta performance do **Google Drive para Ubuntu e distribuições Linux**, desenvolvido a partir da engenharia reversa do cliente oficial do Windows (`Google Drive for Desktop / Drive File Stream`) e evoluído com recursos avançados de sincronização seletiva, controle de conflitos e offline inspirado nas melhores arquiteturas de mercado.
 
-Oferece **paridade total de recursos** em relação ao cliente do Windows, incluindo **streaming de arquivos sob demanda via FUSE**, **janelas de aplicativo dedicadas para Google Docs/Sheets/Slides**, **servidor MCP integrado para IA local**, **sistema de verificação de atualização oficial da Google (Protocolo Omaha)** e **sistema automatizado de diagnóstico e abertura de Issues no GitHub**.
+Oferece **paridade total de recursos** em relação ao cliente oficial do Windows — e vai além com **arquitetura híbrida (FUSE Stream sob demanda + Sincronização Real de Pastas Locais)**, **Delta Sync incremental (`changes.list`)**, **motor `.gitignore` visual e em tempo real**, **matriz de conflitos de 4 casos com resolução em 1 clique**, **exportação offline de Google Docs para LibreOffice/MS Office**, **pasta virtual `/Compartilhados comigo`**, **janelas de aplicativo dedicadas (PWA)**, **servidor MCP integrado para IA local**, **atualização em dois canais (Google Omaha + GitHub Self-Healing)** e **auditoria automatizada ponta a ponta**.
 
 > 📚 **Documentação Técnica Detalhada:**
-> * 📘 [**DOCUMENTATION.md**](DOCUMENTATION.md) — Manual técnico completo de arquitetura, subsistemas de sincronização, VFS, telemetria de logs e auditoria.
+> * 📘 [**DOCUMENTATION.md**](DOCUMENTATION.md) — Manual técnico completo de arquitetura, sincronização híbrida, delta sync, matriz de conflitos, regras `.gitignore`, VFS, UI GTK3, telemetria e auditoria.
 > * 🔬 [**REA.md**](REA.md) — Estudo aprofundado de engenharia reversa dos binários do Windows (`GoogleDriveSetup.exe` e Dokan Driver).
 
 ---
 
 ## 📑 Sumário
-1. [Engenharia Reversa do Google Drive para Windows](#1-engenharia-reversa-do-google-drive-para-windows)
-2. [Arquitetura da Solução para Ubuntu](#2-arquitetura-da-solução-para-ubuntu)
-3. [Google Docs, Planilhas e Slides como Aplicativos Nativos](#3-google-docs-planilhas-e-slides-como-aplicativos-nativos)
-4. [Auto-Atualização Oficial via Protocolo Google Omaha](#4-auto-atualização-oficial-via-protocolo-google-omaha)
-5. [Sistema de Coleta de Logs e Abertura Automática de Issues](#5-sistema-de-coleta-de-logs-e-abertura-automática-de-issues)
-6. [Servidor MCP Embutido para Agentes de IA](#6-servidor-mcp-embutido-para-agentes-de-ia)
-7. [Resultado da Simulação e Verificação de Subsistemas](#7-resultado-da-simulação-e-verificação-de-subsistemas)
-8. [Estrutura do Repositório](#8-estrutura-do-repositório)
-9. [Guia de Instalação no Ubuntu](#9-guia-de-instalação-no-ubuntu)
-10. [Como Usar (CLI e Interface)](#10-como-usar-cli-e-interface)
-11. [Guia de Desinstalação](#11-guia-de-desinstalação)
+1. [Engenharia Reversa e Evolução da Arquitetura](#1-engenharia-reversa-e-evolução-da-arquitetura)
+2. [Arquitetura Híbrida para Ubuntu](#2-arquitetura-híbrida-para-ubuntu)
+3. [Recursos Avançados de Sincronização, Offline e Proteção](#3-recursos-avançados-de-sincronização-offline-e-proteção)
+4. [Interface Gráfica Nativa GTK3 (Telas Avançadas)](#4-interface-gráfica-nativa-gtk3-telas-avançadas)
+5. [Google Docs, Planilhas e Slides como Aplicativos Nativos](#5-google-docs-planilhas-e-slides-como-aplicativos-nativos)
+6. [Auto-Atualização Dual (Google Omaha + GitHub Self-Healing)](#6-auto-atualização-dual-google-omaha--github-self-healing)
+7. [Sistema de Coleta de Logs e Abertura Automática de Issues](#7-sistema-de-coleta-de-logs-e-abertura-automática-de-issues)
+8. [Servidor MCP Embutido para Agentes de IA](#8-servidor-mcp-embutido-para-agentes-de-ia)
+9. [Suíte de Testes e Auditoria Automatizada](#9-suíte-de-testes-e-auditoria-automatizada)
+10. [Estrutura do Repositório](#10-estrutura-do-repositório)
+11. [Guia de Instalação no Ubuntu](#11-guia-de-instalação-no-ubuntu)
+12. [Como Usar (CLI e Interface)](#12-como-usar-cli-e-interface)
+13. [Guia de Desinstalação](#13-guia-de-desinstalação)
 
 ---
 
-## 1. Engenharia Reversa do Google Drive para Windows
+## 1. Engenharia Reversa e Evolução da Arquitetura
 
-A partir da análise do instalador `GoogleDriveSetup.exe` (versão 132.0.0.0, ~292 MB) e da pasta de binários instalados em `C:\Program Files\Google\Drive File Stream`:
-
-### A. Anatomia do Instalador (`GoogleDriveSetup.exe`)
-* **Formato:** Binário PE32+ (x64) compilado em C++ interno da Google (Abseil, Protobuf, gflags).
-* **Armazenamento de Cargas Úteis (Payload):** O instalador armazena os arquivos da aplicação na seção `.rsrc` sob o recurso `RT_RCDATA` (ID 10) utilizando arquivos ZIP padrão:
-  * **ID 101 (129 MB):** Binários completos x86_64 (`GoogleDriveFS.exe`, DLLs, assets HTML).
-  * **ID 104 (127 MB):** Binários completos para arquitetura ARM64.
-  * **ID 102 (4.1 MB):** Desinstalador oficial `uninstall.exe`.
-  * **ID 103 (5.3 MB):** Instalador do Google Update (`UpdaterSetup.exe` / Omaha).
-  * **ID 231 / 232 (142 KB):** Drivers de sistema de arquivos `googledrivefs31931.sys` (x64 e ARM64).
-  * **ID 251 (1.5 MB):** Bootstrapper do runtime Microsoft Edge WebView2.
-
-### B. Por Que o Binário do Windows Não Roda no Linux (Mesmo com Wine)?
-* **O Bloqueio do Driver de Kernel (.sys):** O Google Drive no Windows utiliza o framework **Dokan (Dokany)**. O arquivo `googledrivefs*.sys` é um driver de filtro do kernel do Windows NT que intercepta as chamadas de I/O na unidade virtual (ex: `G:\`). Como o Wine não emula drivers de kernel `.sys`, o cliente falha imediatamente ao tentar inicializar o disco virtual.
-* **Interface WebView2:** Os diálogos e menus do Google Drive oficial são escritos em HTML/CSS/JS (pasta `html/`) e renderizados pelo motor Microsoft Edge WebView2 (`WebView2Loader.dll`), que possui instabilidade sob camadas de compatibilidade.
+A partir da análise do instalador oficial `GoogleDriveSetup.exe` (versão 132.0.0.0, ~292 MB) e dos binários em `C:\Program Files\Google\Drive File Stream`:
+* **Por que o binário do Windows não roda no Linux (nem com Wine)?** O cliente oficial depende do driver de filtro de kernel Dokan (`googledrivefs*.sys`) e do motor `WebView2` do Edge. No Linux, substituímos o driver de kernel por **FUSE em espaço de usuário (`libfuse3`)** e a UI por **GTK3 nativo**.
+* **Evolução Híbrida:** Combinamos o melhor do streaming sob demanda (FUSE com blocos esparsos de 16 MB e zero consumo prévio de disco) com um motor dedicado de **sincronização real de pastas locais** (`LocalSyncWorker`), permitindo escolher pasta por pasta se deseja streaming ou sincronização física real.
 
 ---
 
-## 2. Arquitetura da Solução para Ubuntu
-
-Para alcançar paridade e estabilidade superiores no Ubuntu, a solução substitui cada componente específico do Windows por seu equivalente nativo em Linux:
+## 2. Arquitetura Híbrida para Ubuntu
 
 | Recurso | Windows (Drive File Stream) | Ubuntu (Nossa Solução) |
 | :--- | :--- | :--- |
-| **Sistema de Arquivos Virtual** | Driver de Kernel Dokan (`googledrivefs.sys`) | **FUSE (`libfuse3` / modo de usuário)** |
-| **Camada de Streaming** | `dokancc31931.dll` | **Motor de Sparse Chunks (16MB)** |
-| **Autenticação** | DPAPI / Credential Manager | **OAuth 2.0 PKCE** via Navegador Padrão |
-| **Bandeja do Sistema** | Windows System Tray | **AyatanaAppIndicator** (GNOME e KDE) |
-| **Gerenciador de Arquivos** | Shell Extension (`drivefsext.dll`) | **Extensão Python para Nautilus** com badges |
-| **Banco de Metadados** | `metadata_sqlite_db` (SQLite) | **SQLite local** (`metadata.db`) em WAL mode |
-| **Diagnóstico de Falhas** | Crashpad / `diagnostic_tool.exe` | **Módulo de Diagnóstico e Issues do GitHub** |
+| **Sistema de Arquivos Virtual** | Driver de Kernel Dokan (`googledrivefs.sys`) | **FUSE (`libfuse3` / modo de usuário)** com `statfs()` de cota real |
+| **Sincronização de Pastas Reais** | Apenas espelhamento global | **Híbrido por pasta (`LocalSyncWorker`)**: `TWO_WAY`, `UPLOAD_ONLY`, `DOWNLOAD_ONLY` |
+| **Detecção de Alterações** | Polling / Change Feed interno | **Drive API v3 Delta Sync (`changes.list`)** com `startPageToken` persistido |
+| **Uploads de Arquivos Grandes** | Resumable interno | **Resumable Upload em blocos de 8 MB** com retomada HTTP `308` e pool paralelo |
+| **Camada de Streaming** | `dokancc31931.dll` | **Motor de Sparse Chunks (16 MB)** com coerência por MD5 e LRU |
+| **Filtro de Exclusões** | Limitado | **Motor `.gitignore` completo** (`*`, `?`, `**`, `/`, `!negação`) + editor visual |
+| **Resolução de Conflitos** | Automático básico | **Matriz de 4 casos** + resolução em 1 clique + envio seguro para Lixeira do SO |
+| **Google Docs Offline** | Apenas atalho web | **3 modos**: Atalho Web (`.gdoc`), LibreOffice (`.odt`/`.ods`/`.odp`) ou MS Office (`.docx`/`.xlsx`/`.pptx`) |
+| **Compartilhados Comigo** | Atalho manual | **Pasta virtual `/Compartilhados comigo`** exposta diretamente no FUSE |
+| **Bandeja e Gerenciador** | System Tray + Shell Ext | **AyatanaAppIndicator (GNOME/KDE)** + **Extensão Python para Nautilus** |
+| **Banco de Metadados** | `metadata_sqlite_db` | **SQLite WAL** (`items`, `operations`, `cache_blocks`, `accounts`, `sync_tokens`, `conflicts`, `activity_log`, `local_sync_rules`) |
+| **Diagnóstico & Updates** | Crashpad / Omaha | **Omaha (Canal 1)** + **GitHub Self-Healing (Canal 2)** + **Issues automáticas** |
 
 ---
 
-## 3. Google Docs, Planilhas e Slides como Aplicativos Nativos
+## 3. Recursos Avançados de Sincronização, Offline e Proteção
 
-No Windows, atalhos do Google Docs frequentemente abrem em uma aba normal do navegador com barras de ferramentas. No Ubuntu, nossa solução eleva a experiência ao transformar os documentos em **verdadeiros aplicativos de desktop autônomos**:
-
-* **Janela Dedicada (Modo SSB / PWA):** Ao clicar em um arquivo `.desktop` gerado pelo FUSE, o script `gdrive-doc-launcher` executa o navegador Chromium/Chrome/Brave em modo `--app="https://docs.google.com/..."`.
-* **Sem Distrações:** A janela abre sem barra de endereços, sem favoritos e sem abas de navegação.
-* **Ícones Oficiais no Dock do Ubuntu:** Foram extraídos e convertidos ícones oficiais em alta resolução (256x256 PNG) para cada serviço:
-  * 📄 **Google Docs:** `docs.png` com classe de janela `google-docs`.
-  * 📊 **Google Sheets:** `sheets.png` com classe de janela `google-sheets`.
-  * 📑 **Google Slides:** `slides.png` com classe de janela `google-slides`.
-* **Funcionalidade Integral:** Suporte a atalhos de teclado (`Ctrl+Z`, `Ctrl+S`, `Ctrl+P`), edição colaborativa em tempo real, comentários e histórico de revisões.
-
----
-
-## 4. Auto-Atualização Oficial via Protocolo Google Omaha
-
-O cliente mantém-se atualizado conectando-se diretamente ao servidor de produção da Google que gerencia as atualizações mundiais do Google Drive:
-
-* **Endpoint de Produção:** `https://update.googleapis.com/service/update2/json`
-* **AppID Oficial do Google Drive:** `{6BBAE539-2232-434A-A4E5-9A33560C6283}`
-* **Fluxo:**
-  1. O módulo `updater/omaha_updater.py` consulta o endpoint enviando a versão atual instalada.
-  2. O servidor da Google retorna a versão estável mais recente (ex: `133.0.2.0`), a URL direta do CDN oficial (`dl.google.com`) e o hash criptográfico SHA-256.
-  3. O cliente valida o hash, extrai as novas telas de interface HTML/CSS e notifica o usuário via bandeja do sistema para aplicação rápida.
+* **Delta Sync Incremental (`changes.list`):** Após o scan inicial, o cliente persiste `changes_page_token` por conta na tabela `sync_tokens` e consulta apenas deltas incrementais da API v3 — reduzindo drasticamente o consumo de cota, CPU e tempo de sincronização.
+* **Sincronização Híbrida de Pastas Locais (`core/local_sync.py`):** Sincronize qualquer pasta local real (inclusive em HD externo) em paralelo com as montagens FUSE, com deduplicação por MD5 (*File Matching*), suporte a `TWO_WAY`, `UPLOAD_ONLY` e `DOWNLOAD_ONLY`.
+* **Proteção contra Desconexão de HD Externo e Exclusão Acidental:**
+  * `missing_file_behavior = "UNSYNC"` (padrão seguro): se um HD externo desconectar ou uma pasta raiz ficar vazia/ausente, o motor **jamais apaga arquivos na nuvem**.
+  * Exclusões remotas aplicadas localmente movem arquivos para a **Lixeira do sistema** (`gio trash` com fallback XDG `~/.local/share/Trash`), nunca usando `unlink` destrutivo.
+  * Exclusões na nuvem usam **Lixeira do Google Drive** (`PATCH {"trashed": true}`) em vez de remoção permanente.
+* **Motor `.gitignore` (`core/ignore.py`):** Filtra arquivos temporários, locks do Office/LibreOffice, caches (`__pycache__/`, `node_modules/`, etc.) e regras personalizadas definidas em `~/.config/google-drive-linux/ignore_rules.txt`.
+* **Matriz de Conflitos de 4 Casos (`core/conflicts.py`):** Trata separadamente `LOCAL_EDIT_CLOUD_EDIT`, `LOCAL_EDIT_CLOUD_DELETE`, `LOCAL_EDIT_UNSYNC` e `LOCAL_DELETE_CLOUD_EDIT` com políticas configuráveis (`KEEP_BOTH`, `KEEP_LOCAL`, `KEEP_CLOUD`, `KEEP_UNSYNC`, `ALWAYS_ASK`).
+* **Exportação Offline de Google Docs (`core/docs_converter.py`):** Permite fixar pastas/arquivos offline escolhendo entre atalho web (`.gdoc`/`.gsheet`/`.gslides`), LibreOffice (`.odt`/`.ods`/`.odp`) ou Microsoft Office (`.docx`/`.xlsx`/`.pptx`).
+* **Suporte a Proxy e Backoff Inteligente:** Suporte a proxy `NONE`, `SYSTEM` ou `MANUAL` e retry exponencial com `Retry-After` + jitter para respostas HTTP `403`/`429`/`5xx`.
 
 ---
 
-## 5. Sistema de Coleta de Logs, Diagnóstico e Issues no GitHub (Canal 2)
+## 4. Interface Gráfica Nativa GTK3 (Telas Avançadas)
 
-Para garantir suporte contínuo e resolução imediata de problemas, o projeto conta com um subsistema completo de telemetria e diagnóstico inspirado no `Crashpad` e `diagnostic_tool.exe` da Google, funcionando em dois modos:
+Além da tela inicial, atividade em tempo real, busca dupla (Computador + Nuvem), notificações e popover multi-conta, a janela principal (`ui/webview_window.py` + `ui/advanced_views.py`) inclui:
 
-### A. Coleta e Submissão 100% Automática (Em caso de Falha Não Tratada)
-* **Captura Global de Exceções (`install_global_crash_hook`):** Qualquer falha não tratada em threads de sincronização ou no VFS é imediatamente capturada.
-* **Sanitização de Dados Privados:** Tokens OAuth (`Bearer`), chaves de API, senhas e identificadores pessoais são mascarados automaticamente (`[REDACTED_TOKEN]`).
-* **Abertura de Issue e Notificação:** O erro é empacotado em JSON, salvo localmente em `~/.config/google-drive-linux/crash_reports/` e submetido ao GitHub com notificação nativa via `notify-send`.
-
-### B. Geração Manual sob Demanda (A Qualquer Momento pelo Usuário)
-O usuário pode gerar relatórios de diagnóstico e relatar dúvidas/problemas quando quiser por 3 caminhos:
-1. **Pelo Menu da Engrenagem ⚙️ na Janela:** Clicando em *"Enviar feedback / Relatar Erro"* ou *"Lista de erros"*, onde surge um diálogo para digitar observações.
-2. **Pela Bandeja do Sistema (Systray):** Clicando com o botão direito no ícone do Drive e selecionando *"🐛 Relatar Problema / Diagnóstico..."*.
-3. **Pela Linha de Comando (CLI):**
-   ```bash
-   gdrive-cli report -m "Descrição do problema ou comportamento observado"
-   ```
-
-### C. Ciclo Fechado de Auto-Cura (Self-Healing)
-Assim que o problema é corrigido e o commit/release é enviado para a branch `main` do GitHub, o daemon do usuário detecta a atualização via `GitHubUpdater`, baixa silenciosamente os patches e reinicia o serviço com `systemctl --user restart google-drive.service`, restabelecendo o funcionamento sem necessidade de comandos manuais ou reinicialização da máquina.
+1. **📁 Pastas Locais (Híbrido):** Gerenciador visual para adicionar, ativar/pausar, abrir e remover regras de sincronização de pastas reais por conta, com seletor de pasta no Drive, modo de sincronização e formato offline de Docs.
+2. **🚫 Regras de Exclusão (`.gitignore`):** Editor visual monoespaçado de `ignore_rules.txt`, atalhos de 1 clique (`node_modules/`, `.git/`, `*.log`, `build/ & dist/`, `.venv/`) e **testador em tempo real** que indica instantaneamente se um caminho será ignorado ou sincronizado antes mesmo de salvar.
+3. **⚠️ Central de Conflitos:** Badge dinâmico na barra lateral (`⚠️ Conflitos (N)`), resolução de conflitos pendentes com **1 clique** (*Manter Local*, *Manter Nuvem* ou *Manter Ambos*) e painel completo das políticas automáticas de conflito e proteção de HD externo.
+4. **⚙️ Preferências Expandidas:** Janela com rolagem (`Gtk.ScrolledWindow`) incluindo configurações de formato padrão de Google Docs Offline, comportamento para HD externo desconectado e número de threads paralelas de sincronização (`max_sync_workers`).
 
 ---
 
-## 6. Servidor MCP Embutido para Agentes de IA
+## 5. Google Docs, Planilhas e Slides como Aplicativos Nativos
 
-Durante a análise dos binários oficiais, identificamos o arquivo `dfd_mcp_server.exe` (`apps/drive/fs/mcp/dfd_mcp_server.cc`). Implementamos esse mesmo padrão no Linux através do protocolo **Model Context Protocol (MCP)**:
-
-* **Comando:** `gdrive-cli mcp`
-* **Ferramentas Expostas para IA:**
-  * `search_drive(query)`: Busca arquivos no Google Drive por nome ou metadados.
-  * `get_sync_status()`: Retorna o status de sincronização e uso de cota.
-  * `read_drive_file(item_id)`: Lê o conteúdo de arquivos locais/remotos para contexto de modelos LLM.
-* **Compatibilidade:** Funciona nativamente com Claude Desktop, Antigravity e agentes baseados em MCP.
+* **Janela Dedicada (Modo SSB / PWA):** Ao abrir um arquivo `.desktop` / `.gdoc` / `.gsheet` / `.gslides`, o `gdrive-doc-launcher` executa o navegador Chromium/Chrome/Brave em modo `--app`, sem barra de endereços ou abas.
+* **Ícones Oficiais no Dock do Ubuntu:** Agrupamento nativo via `StartupWMClass` (`google-docs`, `google-sheets`, `google-slides`) com ícones em alta resolução (256x256 PNG).
+* **Login com Conta Pré-Preenchida:** Seleção automática do perfil/conta ativa (`authuser` / e-mail) ao abrir os aplicativos do Workspace.
 
 ---
 
-## 7. Resultado da Simulação e Verificação de Subsistemas
+## 6. Auto-Atualização Dual (Google Omaha + GitHub Self-Healing)
 
-Todos os componentes foram submetidos a uma suíte de testes de integração e simulação (`tests/simulation_suite.py`):
-
-| Subsistema Testado | Cenário Simulado | Resultado |
-| :--- | :--- | :--- |
-| **Banco de Metadados** | Ingestão de contas, hierarquia de diretórios e fila de operações | ✅ Aprovado (100%) |
-| **FUSE VFS (POSIX)** | Permissões de pasta (0755), `readdir`, injeção `.desktop` | ✅ Aprovado (100%) |
-| **Lançador PWA** | Geração dinâmica de atalhos e classes `StartupWMClass` | ✅ Aprovado (100%) |
-| **Cache em Blocos** | Streaming sob demanda de arquivo de 35MB cruzando blocos de 16MB | ✅ Aprovado (100%) |
-| **Google Omaha** | Consulta real HTTPS ao servidor da Google com validação de versão | ✅ Aprovado (100%) |
-| **Servidor MCP** | Despacho JSON-RPC 2.0 e busca de arquivos via IA | ✅ Aprovado (100%) |
-| **Fila de Upload** | Criação de arquivo local interceptada e enfileirada no banco | ✅ Aprovado (100%) |
+* **Canal 1 — Google Omaha (`updater/omaha_updater.py`):** Consulta `https://update.googleapis.com/service/update2/json` (AppID `{6BBAE539-2232-434A-A4E5-9A33560C6283}`), valida SHA-256 e atualiza assets oficiais (`assets/html/` e `assets/icons/`).
+* **Canal 2 — GitHub Self-Healing (`updater/github_updater.py`):** Monitora `gijogadds/google-drive-linux`, baixa automaticamente novos commits/releases da branch `main`, aplica em `/opt/google-drive-linux` e reinicia `google-drive.service` silenciosamente.
 
 ---
 
-## 8. Estrutura do Repositório
+## 7. Sistema de Coleta de Logs e Abertura Automática de Issues
+
+* **Captura Global (`core/diagnostic.py`):** Intercepta exceções não tratadas (`install_global_crash_hook`), mascara automaticamente tokens OAuth (`Bearer`), segredos e e-mails, salva o relatório em `~/.config/google-drive-linux/crash_reports/` e abre/prepara a Issue no GitHub com notificação desktop (`notify-send`).
+* **Acionamento Manual:** Disponível via menu da engrenagem ⚙️, menu da bandeja do sistema ou `gdrive-cli report -m "Descrição"`.
+
+---
+
+## 8. Servidor MCP Embutido para Agentes de IA
+
+Implementação do protocolo **Model Context Protocol (MCP)** (`core/mcp_server.py`), acionado via `gdrive-cli mcp`:
+* `search_drive(query)`: Busca arquivos por nome/metadados no catálogo SQLite local.
+* `get_sync_status()`: Retorna status da sincronização, cota e fila de operações.
+* `read_drive_file(item_id)`: Lê o conteúdo de arquivos via camada de cache local.
+
+---
+
+## 9. Suíte de Testes e Auditoria Automatizada
+
+O projeto conta com duas suítes de verificação:
+* **`scripts/audit_and_test.py`** (também acessível via `gdrive-cli audit`):
+  * **Auditoria de sintaxe:** Compilação de todos os `28/28` arquivos Python sem erros.
+  * **15 testes unitários e de integração** cobrindo `.gitignore` (globs, `**`, diretórios, negação), matriz de conflitos de 4 casos, resolução em 1 clique (`KEEP_LOCAL`, `KEEP_CLOUD`, `KEEP_BOTH`), testador de regras em memória, exportação offline de Docs, Delta Sync (`changes.list`), `LocalSyncWorker` com proteção de raiz ausente, invalidação de cache por MD5, pasta virtual `/Compartilhados comigo`, `mkdir` real, `statfs()` com cota real, parsing RFC3339 e `flush()` sem duplicação.
+  * **Auditoria ao vivo do ambiente:** Verifica `systemctl --user is-active google-drive.service`, montagens FUSE ativas, integridade do SQLite (`PRAGMA integrity_check`) e saúde dos logs.
+* **`tests/simulation_suite.py`:** Simulação ponta a ponta dos 7 subsistemas originais (DB, FUSE POSIX, PWA, Cache 16 MB, Omaha, MCP e fila de upload).
+
+---
+
+## 10. Estrutura do Repositório
 
 ```
 google-drive-linux/
 ├── core/
-│   ├── config.py             # Configurações globais e diretórios
-│   ├── db.py                 # Banco SQLite de metadados e fila de operações
-│   ├── auth.py               # Autenticação OAuth 2.0 PKCE com login no navegador
-│   ├── api.py                # Cliente da API v3 do Google Drive
-│   ├── cache.py              # Gerenciador de cache esparso em blocos e algoritmo LRU
-│   ├── vfs.py                # Sistema de arquivos virtual em modo de usuário (FUSE)
-│   ├── watcher.py            # Fila de sincronização e detecção de alterações
-│   ├── doc_launcher.py       # Lançador de janelas dedicadas de aplicativo para Docs/Sheets
-│   ├── diagnostic.py         # Coletor de diagnóstico e integrador de Issues no GitHub
-│   └── mcp_server.py         # Servidor MCP para agentes de IA locais
+│   ├── config.py             # Configurações globais, multi-conta, proxy e HD externo
+│   ├── db.py                 # SQLite WAL (items, operations, sync_tokens, conflicts, activity_log, local_sync_rules)
+│   ├── auth.py               # Autenticação OAuth 2.0 PKCE multi-conta
+│   ├── api.py                # Cliente Drive API v3 (Delta Sync, Resumable 8 MB, Trash, Export, Proxy, Retry)
+│   ├── cache.py              # Cache esparso 16 MB, coerência MD5, pin recursivo e LRU
+│   ├── vfs.py                # Sistema de arquivos FUSE (POSIX, /Compartilhados comigo, statfs real, .gitignore)
+│   ├── watcher.py            # Motor de sincronização com Delta Sync e ThreadPoolExecutor paralelo
+│   ├── local_sync.py         # Motor híbrido de sincronização real de pastas locais (TWO_WAY/UPLOAD/DOWNLOAD)
+│   ├── ignore.py             # Motor de regras compatível com .gitignore
+│   ├── conflicts.py          # Matriz de conflitos de 4 casos, MD5 e Lixeira segura do SO
+│   ├── docs_converter.py     # Conversor/exportador offline de Google Docs (LINK / ODF / MS Office)
+│   ├── doc_launcher.py       # Lançador PWA para Google Docs/Sheets/Slides
+│   ├── diagnostic.py         # Coletor de diagnóstico, sanitização e Issues no GitHub
+│   ├── version.py            # Controle de versão semântica
+│   └── mcp_server.py         # Servidor MCP para agentes de IA
 ├── ui/
-│   ├── indicator.py          # Indicador da bandeja do GNOME/KDE (AppIndicator)
-│   └── webview_window.py     # Janela de preferências e gerenciador de contas
+│   ├── indicator.py          # Indicador da bandeja GNOME/KDE (AppIndicator)
+│   ├── webview_window.py     # Janela principal GTK3, busca dupla, popover multi-conta e Preferências
+│   ├── advanced_views.py     # Telas GTK3: Pastas Locais, Editor .gitignore e Central de Conflitos 1-clique
+│   └── install_wizard.py     # Assistente inicial de configuração
 ├── nautilus/
-│   └── google_drive_nautilus.py # Extensão de badges e menus para o Nautilus
+│   └── google_drive_nautilus.py # Extensão de badges e menu de contexto para Nautilus
 ├── updater/
-│   └── omaha_updater.py      # Monitor e extrator de atualizações oficiais da Google
-├── assets/
-│   ├── icons/                # Ícones oficiais de alta resolução (Docs, Sheets, Slides, Drive)
-│   └── html/                 # Telas de interface oficiais extraídas do instalador
-├── packaging/
-│   ├── debian/               # Arquivos de controle do pacote Debian (.deb)
-│   ├── systemd/              # Serviço systemd --user para autostart silencioso
-│   └── desktop/              # Atalhos e integrações de menu .desktop
+│   ├── omaha_updater.py      # Canal 1: Atualizações oficiais Google Omaha
+│   └── github_updater.py     # Canal 2: Auto-cura e atualizações via GitHub
+├── scripts/
+│   ├── audit_and_test.py     # Auditoria completa de sintaxe, 15 testes e verificação ao vivo
+│   └── setup_embedded_runtime.sh
 ├── tests/
-│   └── simulation_suite.py   # Suíte completa de verificação automatizada
-├── install.sh                # Instalador automatizado de 1 clique para Ubuntu
-├── uninstall.sh              # Desinstalador limpo
-├── gdrive-cli                # Utilitário de linha de comando para terminal
-├── gdrive-doc-launcher       # Executável do lançador de documentos autônomos
-└── main.py                   # Ponto de entrada do serviço/daemon
+│   └── simulation_suite.py   # Suíte de simulação de subsistemas
+├── assets/                   # Ícones oficiais e assets HTML
+├── packaging/                # Pacote .deb, serviço systemd --user e arquivos .desktop
+├── install.sh / uninstall.sh # Instalador e desinstalador automatizados
+├── gdrive-cli                # Utilitário completo de linha de comando
+├── gdrive-doc-launcher       # Executável do lançador de documentos PWA
+└── main.py                   # Ponto de entrada do daemon e orquestrador multi-conta
 ```
 
 ---
 
-## 9. Guia de Instalação no Ubuntu
+## 11. Guia de Instalação no Ubuntu
 
 Compatível com **Ubuntu 20.04 LTS, 22.04 LTS, 24.04 LTS** e derivados (Linux Mint, Pop!_OS, Debian).
 
-### Passo 1: Clonar o Repositório
 ```bash
 git clone https://github.com/gijogadds/google-drive-linux.git
 cd google-drive-linux
-```
-
-### Passo 2: Executar o Instalador Automatizado
-```bash
 sudo chmod +x install.sh
 sudo ./install.sh
 ```
 
-O script executará automaticamente:
-1. Instalação das dependências necessárias via APT (`python3-gi`, `fuse3`, `python3-fusepy`, `python3-nautilus`, `gir1.2-ayatanaappindicator3-0.1`, `xclip`).
-2. Cópia dos arquivos da aplicação para `/opt/google-drive-linux/`.
-3. Registro dos binários `gdrive-cli` e `gdrive-doc-launcher` no `/usr/local/bin/`.
-4. Instalação da extensão de badges para o gerenciador de arquivos (Nautilus).
-5. Configuração do serviço em segundo plano no `systemd` do usuário.
+> **Dica sobre cota da API Google (Opcional):** Por padrão, o cliente utiliza credenciais OAuth comunitárias compartilhadas, que ocasionalmente podem receber `HTTP 403 (Rate Limit)` em horários de pico (tratado automaticamente com backoff exponencial). Para cota 100% exclusiva e sem limites compartilhados, você pode configurar seu próprio `client_id`/`client_secret` gratuito do Google Cloud em `~/.config/google-drive-linux/config.json`.
 
 ---
 
-## 10. Como Usar (CLI e Interface)
+## 12. Como Usar (CLI e Interface)
 
-### 1. Conectar sua Conta Google
-No terminal ou através do menu de aplicativos:
 ```bash
+# Conectar conta Google e iniciar daemon
 gdrive-cli login
-```
-*Seu navegador padrão será aberto com a tela oficial de login da Google para concessão de acesso.*
-
-### 2. Iniciar a Sincronização em Segundo Plano
-```bash
 systemctl --user enable --now google-drive.service
-```
-*O Google Drive será montado em `~/GoogleDrive` e o ícone de sincronização aparecerá na barra superior do Ubuntu.*
 
-### 3. Comandos Úteis do Terminal (`gdrive-cli`)
-* **Verificar status da conta, cota e sincronização:**
-  ```bash
-  gdrive-cli status
-  ```
-* **Verificar atualizações oficiais da Google (Canal 1 - Omaha):**
-  ```bash
-  gdrive-cli update
-  ```
-* **Verificar e aplicar correções de código do GitHub (Canal 2 - Hotfixes):**
-  ```bash
-  gdrive-cli upgrade
-  ```
-* **Alterar ponto de montagem ou pasta de cache (ex: HD Externo):**
-  ```bash
-  gdrive-cli set-path --mount /media/usuario/HD_EXTERNO/GoogleDrive --cache /media/usuario/HD_EXTERNO/Cache
-  ```
-* **Gerar relatório de diagnóstico e abrir Issue no GitHub:**
-  ```bash
-  gdrive-cli report -m "Descrição do problema"
-  ```
-* **Iniciar servidor MCP para assistentes de IA:**
-  ```bash
-  gdrive-cli mcp
-  ```
+# Status geral (contas, cota real, fila e montagens)
+gdrive-cli status
+
+# Sincronização híbrida de pastas reais (TWO_WAY, UPLOAD_ONLY, DOWNLOAD_ONLY)
+gdrive-cli local-sync list
+gdrive-cli local-sync add <account_id> ~/Projetos root --mode TWO_WAY --export OPEN_DOCUMENT
+gdrive-cli local-sync remove ~/Projetos
+
+# Regras .gitignore
+gdrive-cli ignore list
+gdrive-cli ignore test app/node_modules/pacote/index.js
+
+# Central de conflitos e log estruturado de atividades
+gdrive-cli conflicts
+gdrive-cli activity
+
+# Auditoria completa (sintaxe + 15 testes + ambiente ao vivo)
+gdrive-cli audit
+
+# Atualizações (Canal 1 Google Omaha / Canal 2 GitHub)
+gdrive-cli update
+gdrive-cli upgrade
+
+# Diagnóstico / Relatar problema e Servidor MCP
+gdrive-cli report -m "Descrição do problema"
+gdrive-cli mcp
+```
 
 ---
 
-## 11. Guia de Desinstalação
-
-Caso queira remover completamente a aplicação do sistema:
+## 13. Guia de Desinstalação
 
 ```bash
 cd google-drive-linux
@@ -258,13 +227,7 @@ sudo chmod +x uninstall.sh
 sudo ./uninstall.sh
 ```
 
-O desinstalador remove:
-* O serviço do `systemd` e para as instâncias ativas.
-* Todos os arquivos em `/opt/google-drive-linux` e links em `/usr/local/bin/`.
-* A extensão do Nautilus e atalhos de menu.
-* Reinicia o Nautilus para remover os emblemas dos arquivos.
-
 ---
 
 ## 📄 Licença
-Distribuído sob a licença MIT. Consulte `LICENSE` para mais informações.
+Distribuído sob a licença MIT. Consulte [`LICENSE`](LICENSE) para mais informações.
