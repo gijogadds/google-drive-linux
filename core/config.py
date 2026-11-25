@@ -706,12 +706,19 @@ def update_workspace_desktop_entries(config: Optional[Dict[str, Any]] = None) ->
             except Exception as e:
                 print(f"[Config] Aviso ao escrever {filename}: {e}")
 
-    # Also google-drive.desktop
+    # Also google-drive.desktop (use real executable & absolute icon path so GNOME Lock Screen / notifications never fall back to a gear icon)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main_py_exec = "/opt/google-drive-linux/main.py" if os.path.exists("/opt/google-drive-linux/main.py") else os.path.join(project_root, "main.py")
+    drive_icon_abs = "/opt/google-drive-linux/assets/icons/drive_fs.png"
+    if not os.path.exists(drive_icon_abs):
+        cand_icon = os.path.join(project_root, "assets", "icons", "drive_fs.png")
+        drive_icon_abs = cand_icon if os.path.exists(cand_icon) else "google-drive"
+
     gd_actions = ["Settings"]
     gd_action_blocks = [
         "[Desktop Action Settings]\n"
         "Name=Configurações do Google Drive\n"
-        "Exec=/usr/local/bin/google-drive --settings"
+        f"Exec=/usr/bin/python3 {main_py_exec} --settings"
     ]
     for acc_id, acc_data in accounts_info.items():
         disp = account_names.get(acc_id) or acc_data.get("display_name") or acc_data.get("email") or acc_id
@@ -731,8 +738,8 @@ def update_workspace_desktop_entries(config: Optional[Dict[str, Any]] = None) ->
         "Name=Google Drive\n"
         "GenericName=Sincronizador Google Drive\n"
         "Comment=Acesso aos seus arquivos do Google Drive diretamente no Ubuntu\n"
-        "Exec=/usr/local/bin/google-drive --home\n"
-        "Icon=google-drive\n"
+        f"Exec=/usr/bin/python3 {main_py_exec} --open-home\n"
+        f"Icon={drive_icon_abs}\n"
         "Terminal=false\n"
         "Type=Application\n"
         "Categories=Network;FileTransfer;Utility;\n"
