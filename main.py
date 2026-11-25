@@ -277,6 +277,7 @@ class GoogleDriveDaemon:
             self.indicator.sync_worker = self.sync_worker
         if self.home_window:
             self.home_window.sync_worker = self.sync_worker
+            self.home_window.cache_manager = self.cache
 
     def _start_ipc_server(self):
         """Listen on UNIX socket so desktop icon launches open the window in the running instance."""
@@ -340,7 +341,8 @@ class GoogleDriveDaemon:
                 auth_manager=self.auth,
                 sync_worker=self.sync_worker,
                 on_open_settings=self.open_settings,
-                on_account_connected=self._on_account_connected
+                on_account_connected=self._on_account_connected,
+                cache_manager=self.cache,
             )
         self.home_window.show()
         return False

@@ -41,16 +41,21 @@ except Exception:
 
 
 class GoogleDriveHomeWindow:
-    def __init__(self, config: Dict[str, Any], db, auth_manager=None, sync_worker=None, on_open_settings=None, on_account_connected=None):
+    def __init__(self, config: Dict[str, Any], db, auth_manager=None, sync_worker=None, on_open_settings=None, on_account_connected=None, cache_manager=None):
         self.config = config
         self.db = db
         self.auth = auth_manager
         self.sync_worker = sync_worker
+        self.cache_manager = cache_manager
         self.on_open_settings = on_open_settings
         self.on_account_connected = on_account_connected
         self.window = None
         self.stack = None
         self.gear_menu = None
+        self._nav_buttons = []
+        self._btn_nav_conflicts = None
+        self._page_local_sync = None
+        self._page_conflicts = None
 
     def show(self):
         if not HAS_GTK:
@@ -196,6 +201,24 @@ class GoogleDriveHomeWindow:
         btn_nav_notifications.set_alignment(0, 0.5)
         sidebar.pack_start(btn_nav_notifications, False, False, 0)
 
+        sidebar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 4)
+
+        btn_nav_local_sync = Gtk.Button(label="📁  Pastas Locais")
+        btn_nav_local_sync.set_alignment(0, 0.5)
+        btn_nav_local_sync.set_tooltip_text("Sincronização híbrida de pastas reais (Bidirecional / Upload / Download)")
+        sidebar.pack_start(btn_nav_local_sync, False, False, 0)
+
+        btn_nav_ignore = Gtk.Button(label="🚫  Regras de Exclusão")
+        btn_nav_ignore.set_alignment(0, 0.5)
+        btn_nav_ignore.set_tooltip_text("Editor visual de regras .gitignore com testador em tempo real")
+        sidebar.pack_start(btn_nav_ignore, False, False, 0)
+
+        btn_nav_conflicts = Gtk.Button(label="⚠️  Conflitos")
+        btn_nav_conflicts.set_alignment(0, 0.5)
+        btn_nav_conflicts.set_tooltip_text("Resolver conflitos de sincronização com 1 clique e configurar políticas")
+        sidebar.pack_start(btn_nav_conflicts, False, False, 0)
+        self._btn_nav_conflicts = btn_nav_conflicts
+
         body.pack_start(sidebar, False, False, 0)
         body.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 0)
 
@@ -204,10 +227,30 @@ class GoogleDriveHomeWindow:
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.stack.set_transition_duration(200)
 
+        self._nav_buttons = [
+            btn_nav_home,
+            btn_nav_activity,
+            btn_nav_notifications,
+            btn_nav_local_sync,
+            btn_nav_ignore,
+            btn_nav_conflicts,
+        ]
+        self._nav_map = {
+            "home": btn_nav_home,
+            "activity": btn_nav_activity,
+            "notifications": btn_nav_notifications,
+            "local_sync": btn_nav_local_sync,
+            "ignore": btn_nav_ignore,
+            "conflicts": btn_nav_conflicts,
+        }
+
         # Conectar navegação das abas
-        btn_nav_home.connect("clicked", lambda _: self._switch_tab(btn_nav_home, "home", [btn_nav_home, btn_nav_activity, btn_nav_notifications]))
-        btn_nav_activity.connect("clicked", lambda _: self._switch_tab(btn_nav_activity, "activity", [btn_nav_home, btn_nav_activity, btn_nav_notifications]))
-        btn_nav_notifications.connect("clicked", lambda _: self._switch_tab(btn_nav_notifications, "notifications", [btn_nav_home, btn_nav_activity, btn_nav_notifications]))
+        btn_nav_home.connect("clicked", lambda _: self._switch_tab(btn_nav_home, "home", self._nav_buttons))
+        btn_nav_activity.connect("clicked", lambda _: self._switch_tab(btn_nav_activity, "activity", self._nav_buttons))
+        btn_nav_notifications.connect("clicked", lambda _: self._switch_tab(btn_nav_notifications, "notifications", self._nav_buttons))
+        btn_nav_local_sync.connect("clicked", lambda _: self._switch_tab(btn_nav_local_sync, "local_sync", self._nav_buttons))
+        btn_nav_ignore.connect("clicked", lambda _: self._switch_tab(btn_nav_ignore, "ignore", self._nav_buttons))
+        btn_nav_conflicts.connect("clicked", lambda _: self._switch_tab(btn_nav_conflicts, "conflicts", self._nav_buttons))
 
         # --- PÁGINA 1: INÍCIO (Tela com os 4 Cartões) ---
         page_home = self._create_page_home(assets_dir)
@@ -225,12 +268,51 @@ class GoogleDriveHomeWindow:
         page_search = self._create_page_search()
         self.stack.add_named(page_search, "search")
 
+        # --- PÁGINAS AVANÇADAS (Pastas Locais, Regras .gitignore, Conflitos) ---
+        from ui.advanced_views import LocalSyncPage, IgnoreRulesPage, ConflictsPage
+        self._page_local_sync = LocalSyncPage(self.db, self.config, parent_window_getter=lambda: self.window)
+        self.stack.add_named(self._page_local_sync, "local_sync")
+
+        self._page_ignore = IgnoreRulesPage(parent_window_getter=lambda: self.window)
+        self.stack.add_named(self._page_ignore, "ignore")
+
+        self._page_conflicts = ConflictsPage(
+            self.db,
+            self.config,
+            cache_manager=self.cache_manager,
+            parent_window_getter=lambda: self.window,
+            on_resolved=self._update_conflict_badge,
+        )
+        self.stack.add_named(self._page_conflicts, "conflicts")
+
         body.pack_start(self.stack, True, True, 0)
+
+    def _navigate_to(self, page_name: str):
+        btn = getattr(self, "_nav_map", {}).get(page_name)
+        if btn and self._nav_buttons:
+            self._switch_tab(btn, page_name, self._nav_buttons)
+        elif self.stack:
+            self.stack.set_visible_child_name(page_name)
+
+    def _update_conflict_badge(self):
+        try:
+            if self._btn_nav_conflicts is not None:
+                pending = len(self.db.get_pending_conflicts())
+                lbl = f"⚠️  Conflitos ({pending})" if pending > 0 else "⚠️  Conflitos"
+                if self._btn_nav_conflicts.get_label() != lbl:
+                    self._btn_nav_conflicts.set_label(lbl)
+        except Exception:
+            pass
 
     def _switch_tab(self, active_btn, page_name, all_buttons):
         for b in all_buttons:
             b.set_relief(Gtk.ReliefStyle.NONE)
         active_btn.set_relief(Gtk.ReliefStyle.NORMAL)
+        if page_name == "local_sync" and self._page_local_sync is not None:
+            self._page_local_sync.refresh()
+        elif page_name == "conflicts" and self._page_conflicts is not None:
+            self._page_conflicts.refresh()
+            self._update_conflict_badge()
         self.stack.set_visible_child_name(page_name)
 
     # =========================================================================
@@ -250,6 +332,20 @@ class GoogleDriveHomeWindow:
         item_errors = Gtk.MenuItem(label="Lista de erros")
         item_errors.connect("activate", lambda _: self._show_error_list_dialog())
         menu.append(item_errors)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        item_local_sync = Gtk.MenuItem(label="📁 Pastas Locais (Híbrido)")
+        item_local_sync.connect("activate", lambda _: self._navigate_to("local_sync"))
+        menu.append(item_local_sync)
+
+        item_ignore = Gtk.MenuItem(label="🚫 Regras de Exclusão (.gitignore)")
+        item_ignore.connect("activate", lambda _: self._navigate_to("ignore"))
+        menu.append(item_ignore)
+
+        item_conflicts = Gtk.MenuItem(label="⚠️ Resolver Conflitos")
+        item_conflicts.connect("activate", lambda _: self._navigate_to("conflicts"))
+        menu.append(item_conflicts)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -778,6 +874,7 @@ class GoogleDriveHomeWindow:
                 self._last_header_sig = header_sig
 
             # 1. Update Home Card 1 ("Status de sincronização")
+            self._update_conflict_badge()
             if header_changed and hasattr(self, "home_sync_subtitle_lbl"):
                 self.home_sync_progress.set_fraction(fraction)
                 self.home_sync_progress.set_text(pct_text)
@@ -1820,7 +1917,7 @@ class SettingsDialog:
         Gdk.set_program_class("google-drive")
 
         window = Gtk.Window(title="Google Drive - Preferências")
-        window.set_default_size(580, 520)
+        window.set_default_size(620, 620)
         window.set_position(Gtk.WindowPosition.CENTER)
         try:
             window.set_wmclass("google-drive", "Google Drive")
@@ -1840,12 +1937,21 @@ class SettingsDialog:
             except Exception:
                 pass
 
+        outer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        outer_box.set_margin_top(16)
+        outer_box.set_margin_bottom(16)
+        outer_box.set_margin_start(18)
+        outer_box.set_margin_end(18)
+        window.add(outer_box)
+
+        scroll_pref = Gtk.ScrolledWindow()
+        scroll_pref.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll_pref.set_vexpand(True)
+        outer_box.pack_start(scroll_pref, True, True, 0)
+
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
-        vbox.set_margin_top(20)
-        vbox.set_margin_bottom(20)
-        vbox.set_margin_start(20)
-        vbox.set_margin_end(20)
-        window.add(vbox)
+        vbox.set_margin_end(8)
+        scroll_pref.add(vbox)
 
         title_label = Gtk.Label()
         title_label.set_markup("<big><b>Preferências do Google Drive</b></big>")
@@ -2001,7 +2107,47 @@ class SettingsDialog:
         sync_frame.add(sync_box)
         vbox.pack_start(sync_frame, False, False, 0)
 
-        # Bottom Buttons
+        # Advanced Offline, Protection & Performance Options
+        adv_frame = Gtk.Frame(label="Offline, Proteção de Dados e Desempenho")
+        adv_grid = Gtk.Grid(column_spacing=10, row_spacing=8)
+        adv_grid.set_margin_top(10)
+        adv_grid.set_margin_bottom(10)
+        adv_grid.set_margin_start(10)
+        adv_grid.set_margin_end(10)
+
+        lbl_docs_exp = Gtk.Label(label="Google Docs Offline:")
+        lbl_docs_exp.set_alignment(0, 0.5)
+        cb_docs_exp = Gtk.ComboBoxText()
+        cb_docs_exp.append("LINK", "Atalho Web (.gdoc / .gsheet / .gslides)")
+        cb_docs_exp.append("OPEN_DOCUMENT", "LibreOffice (.odt / .ods / .odp)")
+        cb_docs_exp.append("MS_OFFICE", "Microsoft Office (.docx / .xlsx / .pptx)")
+        cur_docs_exp = self.config.get("docs_export_mode", "LINK")
+        cb_docs_exp.set_active_id(cur_docs_exp if cur_docs_exp in ("LINK", "OPEN_DOCUMENT", "MS_OFFICE") else "LINK")
+        cb_docs_exp.set_hexpand(True)
+        adv_grid.attach(lbl_docs_exp, 0, 0, 1, 1)
+        adv_grid.attach(cb_docs_exp, 1, 0, 1, 1)
+
+        lbl_missing_bh = Gtk.Label(label="HD externo desconectado:")
+        lbl_missing_bh.set_alignment(0, 0.5)
+        cb_missing_bh = Gtk.ComboBoxText()
+        cb_missing_bh.append("UNSYNC", "🛡️ Seguro — Apenas dessincronizar (nunca apagar)")
+        cb_missing_bh.append("DELETE", "⚠️ Excluir da nuvem")
+        cur_miss = self.config.get("missing_file_behavior", "UNSYNC")
+        cb_missing_bh.set_active_id(cur_miss if cur_miss in ("UNSYNC", "DELETE") else "UNSYNC")
+        adv_grid.attach(lbl_missing_bh, 0, 1, 1, 1)
+        adv_grid.attach(cb_missing_bh, 1, 1, 1, 1)
+
+        lbl_workers = Gtk.Label(label="Threads paralelas de sync:")
+        lbl_workers.set_alignment(0, 0.5)
+        spin_workers = Gtk.SpinButton.new_with_range(1, 12, 1)
+        spin_workers.set_value(int(self.config.get("max_sync_workers", 4)))
+        adv_grid.attach(lbl_workers, 0, 2, 1, 1)
+        adv_grid.attach(spin_workers, 1, 2, 1, 1)
+
+        adv_frame.add(adv_grid)
+        vbox.pack_start(adv_frame, False, False, 0)
+
+        # Bottom Buttons (fixed at bottom of window)
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         btn_box.set_halign(Gtk.Align.END)
 
@@ -2018,6 +2164,9 @@ class SettingsDialog:
             updated_config["mount_point"] = path_entry.get_text().strip() or os.path.expanduser("~/GoogleDrive")
             updated_config["cache_dir"] = cache_entry.get_text().strip() or os.path.expanduser("~/.cache/google-drive-linux")
             updated_config["autostart"] = autostart_cb.get_active()
+            updated_config["docs_export_mode"] = cb_docs_exp.get_active_id() or "LINK"
+            updated_config["missing_file_behavior"] = cb_missing_bh.get_active_id() or "UNSYNC"
+            updated_config["max_sync_workers"] = int(spin_workers.get_value())
 
             if "account_mounts" not in updated_config or not isinstance(updated_config.get("account_mounts"), dict):
                 updated_config["account_mounts"] = {}
@@ -2064,7 +2213,7 @@ class SettingsDialog:
 
         btn_save.connect("clicked", _save)
         btn_box.pack_start(btn_save, False, False, 0)
-        vbox.pack_start(btn_box, False, False, 0)
+        outer_box.pack_start(btn_box, False, False, 0)
 
         self.window = window
         window.show_all()

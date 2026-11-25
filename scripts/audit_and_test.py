@@ -286,6 +286,58 @@ class TestSyncEngineAndVFS(unittest.TestCase):
         self.assertIn("Contrato.pdf", shared_entries)
 
 
+class TestAdvancedUILogic(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="gdrive_ui_test_")
+        self.db = MetadataDB(os.path.join(self.tmp, "meta.db"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_in_memory_ignore_tester(self):
+        from ui.advanced_views import test_ignore_rules_in_memory
+        rules = "*.log\nnode_modules/\n!important.log\n"
+        self.assertTrue(test_ignore_rules_in_memory(rules, "debug.log"))
+        self.assertFalse(test_ignore_rules_in_memory(rules, "important.log"))
+        self.assertTrue(test_ignore_rules_in_memory(rules, "app/node_modules/pkg/a.js"))
+        self.assertFalse(test_ignore_rules_in_memory(rules, "app/src/index.js"))
+
+    def test_one_click_conflict_resolution_actions(self):
+        from ui.advanced_views import apply_conflict_resolution
+        f_local = os.path.join(self.tmp, "relatorio.txt")
+        with open(f_local, "w", encoding="utf-8") as f:
+            f.write("versao local")
+
+        # 1. KEEP_BOTH creates conflict copy & resolves
+        self.db.record_conflict("acc1", "item1", "LOCAL_EDIT_CLOUD_EDIT", local_path=f_local, cloud_name="relatorio.txt")
+        conflict1 = self.db.get_pending_conflicts("acc1")[0]
+        ok, msg = apply_conflict_resolution(self.db, conflict1, "KEEP_BOTH")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(self.db.get_pending_conflicts("acc1")), 0)
+        copies = [fn for fn in os.listdir(self.tmp) if "conflito" in fn]
+        self.assertEqual(len(copies), 1)
+
+        # 2. KEEP_LOCAL queues upload_modify & resolves
+        self.db.record_conflict("acc1", "item2", "LOCAL_EDIT_CLOUD_EDIT", local_path=f_local, cloud_name="relatorio.txt")
+        conflict2 = self.db.get_pending_conflicts("acc1")[0]
+        ok2, msg2 = apply_conflict_resolution(self.db, conflict2, "KEEP_LOCAL")
+        self.assertTrue(ok2, msg2)
+        ops = self.db.get_pending_operations(account_id="acc1")
+        self.assertTrue(any(op["item_id"] == "item2" and op["op_type"] == "upload_modify" for op in ops))
+
+        # 3. KEEP_CLOUD invalidates cache, trashes local file & resolves
+        f_trash = os.path.join(self.tmp, "descartar.txt")
+        with open(f_trash, "w", encoding="utf-8") as f:
+            f.write("velho")
+        self.db.record_conflict("acc1", "item3", "LOCAL_EDIT_CLOUD_EDIT", local_path=f_trash, cloud_name="descartar.txt")
+        conflict3 = self.db.get_pending_conflicts("acc1")[0]
+        mock_cache = MagicMock()
+        ok3, msg3 = apply_conflict_resolution(self.db, conflict3, "KEEP_CLOUD", cache_manager=mock_cache)
+        self.assertTrue(ok3, msg3)
+        mock_cache.invalidate_item_cache.assert_called_once_with("item3")
+        self.assertFalse(os.path.exists(f_trash))
+
+
 def run_syntax_audit() -> bool:
     print("\n=== 1. AUDITORIA DE SINTAXE PYTHON ===")
     ok = True
